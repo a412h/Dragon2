@@ -1,0 +1,13 @@
+Foreword:
+Dragon is an independent reimplementation inspired by the ryujin project
+(https://github.com/conservation-laws/ryujin), which is licensed under the
+Apache License 2.0 with LLVM Exception. Please refer to ryujin repository for
+its authors and license.
+
+License:
+This project is licensed under the terms of the Apache License 2.0 with LLVM
+Exception.
+
+For files in this repository:
+    Copyright (C) 2025 by the author of Dragon
+
