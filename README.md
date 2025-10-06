@@ -19,7 +19,7 @@ It is not a fork as many parts of the original code have been entirely rewritten
 The approach followed here is to transfer the entire computation on the GPU to offer maximal speed.
 
 ## Remarks
-- Version II (Navier-Stokes)
+- Version II (Navier-Stokes)  
   Only two dimension cases have been tested  
   Only the Navier-Stokes cylinder case has been tested  
 - Single GPU computation
