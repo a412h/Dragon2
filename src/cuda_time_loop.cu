@@ -1,4 +1,4 @@
-// cuda_time_loop.cu - SoA version with memory bandwidth optimizations
+// cuda_time_loop.cu
 #include <cuda_runtime.h>
 #include <iostream>
 #include <iomanip>
@@ -86,10 +86,10 @@ private:
     const Number mu;
     const Number cv_inverse_kappa;
     
-    cudaStream_t stream;  // Variable stream declared before parabolic_solver instanciation
+    cudaStream_t stream;  // Variable stream declared before parabolic_solver instanciation (debug)
     const OfflineData<dim, double>& offline_data;
     
-    ParabolicSolver<dim, Number> parabolic_solver;  // Instanciation for parabolic part (after stream is declared)
+    ParabolicSolver<dim, Number> parabolic_solver;  // Instanciation for parabolic part (after stream is declared) (debug)
     
     // Kernel configuration
     struct KernelConfig {
@@ -430,15 +430,20 @@ Number_cu cuda_time_loop(
     const Number_cu v_inf = Number_cu(0);
     const Number_cu p_inf = static_cast<Number_cu>(config.primitive_state[2]);
     const Number_cu gamma = static_cast<Number_cu>(config.gamma);
-    const Number_cu E_inf = p_inf / (gamma - Number_cu(1)) + 
-                            Number_cu(0.5) * rho_inf * (u_inf * u_inf + v_inf * v_inf);
+    Number_cu E_inf = p_inf / (gamma - Number_cu(1)) + 
+                      Number_cu(0.5) * rho_inf * (u_inf * u_inf + v_inf * v_inf);
+    if constexpr (dim == 3) {
+        const Number_cu w_inf = Number_cu(0);
+        E_inf += Number_cu(0.5) * rho_inf * w_inf * w_inf;
+    }
     const Number_cu mu = static_cast<Number_cu>(config.mu_reference);
     const Number_cu cv_inverse_kappa = static_cast<Number_cu>(config.cv_inverse_kappa_reference);
     
     Number_cu inflow_rho = rho_inf;
     Number_cu inflow_momentum_x = rho_inf * u_inf;
     Number_cu inflow_momentum_y = rho_inf * v_inf;
-    Number_cu inflow_momentum_z = (dim == 3) ? Number_cu(0) : Number_cu(0);
+    const Number_cu w_inf = (dim == 3) ? Number_cu(0) : Number_cu(0);
+    Number_cu inflow_momentum_z = (dim == 3) ? (rho_inf * w_inf) : Number_cu(0);
     Number_cu inflow_energy = E_inf;
     
     // Initial state preparation

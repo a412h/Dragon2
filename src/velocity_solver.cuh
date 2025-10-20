@@ -5,7 +5,7 @@
 #include <cublas_v2.h>
 #include <iostream>
 
-// Matrix-free version
+// Version M-F (Qdebug)
 template<int dim, typename Number>
 __global__ void apply_velocity_operator_kernel(
     const Number* velocity_in,         // Input velocity [n_dofs * dim]
@@ -18,7 +18,7 @@ __global__ void apply_velocity_operator_kernel(
     const Number* mij_values,          // M_ij matrix values [nnz]
     Number mu,                         // Dynamic viscosity
     Number lambda,                     // Second viscosity parameter
-    Number tau,                        // Time step
+    Number tau,                        // Time step (theta_x_tau)
     int n_dofs)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -39,47 +39,53 @@ __global__ void apply_velocity_operator_kernel(
         result[d] = m_i * rho_i * V_i[d];
     }
     
-    // Add viscous operator contribution: tau * B_ij * V
-    // B_ij implements the stress divergence: -nabla . (2*mu*eps(v) + lambda*div(v)*I)
-    // where eps(v) is the symmetric gradient
-    
     const int row_start = cij_row_offsets[i];
     const int row_end = cij_row_offsets[i + 1];
     
-    // Viscous operator: tau * sum_j (c_ij * m_ij * c_ij^T) * (V_j - V_i)
-    const Number lambda_bar = lambda - Number(2.0/3.0) * mu;
-    const Number two = Number(2);
+    const Number lambda_bar = lambda - Number(2.0 / 3.0) * mu;
+    const Number two_mu = Number(2.0) * mu;
     
     for (int idx = row_start; idx < row_end; ++idx) {
         const int j = cij_col_indices[idx];
         const Number m_ij = mij_values[idx];
         
+        // Load c_ij vector
         Number c_ij[dim];
         for (int d = 0; d < dim; ++d) {
             c_ij[d] = cij_values[idx * dim + d];
         }
         
+        // Load velocity at neighbor j
         Number V_j[dim];
         for (int d = 0; d < dim; ++d) {
             V_j[d] = velocity_in[j * dim + d];
         }
         
-        // Compute c_ij * m_ij
-        Number c_ij_m_ij[dim];
+        // Compute velocity difference
+        Number dV[dim];
         for (int d = 0; d < dim; ++d) {
-            c_ij_m_ij[d] = c_ij[d] * m_ij;
+            dV[d] = V_j[d] - V_i[d];
         }
         
-        // Apply b_ij = (2*mu + lambda_bar) * c_ij_m_ij tens c_ij to (V_j - V_i)
+        // Compute c_ij . c_ij
+        Number c_dot_c = Number(0);
+        for (int d = 0; d < dim; ++d) {
+            c_dot_c += c_ij[d] * c_ij[d];
+        }
+        
         for (int d = 0; d < dim; ++d) {
             Number contrib = Number(0);
+            
             for (int e = 0; e < dim; ++e) {
-                Number b_de = (two * mu + lambda_bar) * c_ij_m_ij[d] * c_ij[e];
-                contrib += b_de * (V_j[e] - V_i[e]);
+                Number S_de = two_mu * m_ij * c_ij[d] * c_ij[e];
+                if (d == e) {
+                    S_de += lambda_bar * m_ij * c_dot_c;
+                }
+                contrib += S_de * dV[e];
             }
             result[d] += tau * contrib;
         }
-    }    
+    }
     
     // Write result
     for (int d = 0; d < dim; ++d) {
@@ -153,14 +159,14 @@ private:
     const int n_dofs;
     const int vector_size;
     
-    // Working vectors for PCG
+    // Vectors for PCG
     Number* d_r;        // Residual
     Number* d_z;        // Preconditioned residual
     Number* d_p;        // Search direction
     Number* d_Ap;       // A * p
     Number* d_diag_inv; // Diagonal preconditioner
     
-    // System matrices (references to external data)
+    // System matrices
     const Number* d_density;
     const Number* d_lumped_mass_matrix;
     const int* d_cij_row_offsets;

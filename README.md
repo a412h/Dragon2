@@ -13,15 +13,14 @@
 
 ## Description
 This project is a CUDA port of the solver ryujin (https://github.com/conservation-laws/ryujin).
-It is not a fork as many parts of the original code have been entirely rewritten for CUDA, and it is not an official contribution.
+It is not a fork as most of the original code have been entirely rewritten for CUDA, and it is not an official contribution.
 
 ## Key Concepts
 The approach followed here is to transfer the entire computation on the GPU to offer maximal speed.
 
 ## Remarks
 - Version II (Navier-Stokes)  
-  Only two dimension cases have been tested  
-  Only the Navier-Stokes cylinder case has been tested  
+  - Navier-Stokes Mach3 cylinder cases in 2d and 3d have been tested  
 - Single GPU computation
 - Except for the generation of output files, libraries OpenMP, MPI and SIMD have been removed, as all computations are done on the GPU
 
@@ -45,6 +44,7 @@ make
 ./solver_ns
 ```
 
-### This is an extract of the transcient simulation of the test case Navier-Stokes cylinder 2d (Mach 4):
+### These are extracts of transcient simulations of the test cases Navier-Stokes cylinder Mach3, resp. in 2d and 3d:
 
-![Cylinder 2D](ns_mach4_2d_7.png)
+![Cylinder 2D](ns_mach3_2d_7.png)
+![Cylinder 3D](ns_mach3_3d_5.png)

@@ -170,7 +170,9 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
     
     // Kernel 1: Compute viscous heating
     const int element_blocks = (element_connectivity->n_elements + 127) / 128;
-    compute_viscous_heating_kernel<dim, Number><<<element_blocks, 128, 0, stream>>>(
+    constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
+    constexpr size_t shared_mem_size = 128 * nodes_per_elem * dim * sizeof(Number);
+    compute_viscous_heating_kernel<dim, Number, nodes_per_elem><<<element_blocks, 128, shared_mem_size, stream>>>(
         d_velocity_solution,
         d_internal_energy_rhs,
         element_connectivity->d_element_nodes,

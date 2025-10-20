@@ -156,6 +156,53 @@ public:
         std::cout << "  Slip (walls/cylinder): " << boundary_count[SLIP] << std::endl;
         std::cout << "  Dirichlet (left): " << boundary_count[DIRICHLET] << std::endl;
     }
+
+    static void create_cylinder_mesh(Triangulation<3>& triangulation,
+                                         const Configuration& config) {
+            // Create 2D mesh first
+            Triangulation<2> tria_2d;
+            Configuration config_2d = config;
+            create_cylinder_mesh(tria_2d, config_2d);
+            
+            const double height = config.height;
+            
+            // Extrude 2D mesh into 3D
+            GridGenerator::extrude_triangulation(tria_2d, 4, height, triangulation, true);
+            
+            // Shift to center the mesh in z-direction
+            GridTools::shift(Tensor<1, 3>{{0, 0, -height / 2.0}}, triangulation);
+            
+            // Restore cylindrical manifold with z-axis
+            triangulation.set_manifold(0, CylindricalManifold<3>(Tensor<1, 3>{{0., 0., 1.}}, Point<3>()));
+            
+            // Set boundary ids for 3D
+            for (auto cell : triangulation.active_cell_iterators()) {
+                for (auto f : cell->face_indices()) {
+                    const auto face = cell->face(f);
+                    if (!face->at_boundary()) continue;
+                    
+                    const auto center = face->center();
+                    
+                    const double cylinder_position = config.object_position;
+                    const double length = config.length;
+                    
+                    // Right boundary: do_nothing (0)
+                    if (center[0] > length - cylinder_position - 1.e-6) {
+                        face->set_boundary_id(DO_NOTHING);
+                        continue;
+                    }
+                    
+                    // Left boundary: dirichlet (4)
+                    if (center[0] < -cylinder_position + 1.e-6) {
+                        face->set_boundary_id(DIRICHLET);
+                        continue;
+                    }
+                    
+                    // Everything else: slip (2)
+                    face->set_boundary_id(SLIP);
+                }
+            }
+        }   
 };
 
 #endif

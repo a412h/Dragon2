@@ -7,13 +7,42 @@
 #include <deal.II/fe/fe_values.h>
 #include <deal.II/base/quadrature_lib.h>
 
-template<int dim, typename Number>
+// ============================================================================
+// Constant memory for quadrature data (optimization)
+// ============================================================================
+namespace QuadratureData {
+    // 2D quadrature points (Gauss)
+    __constant__ float c_quad_pts_2d[4][2] = {
+        {-0.57735026918962576451f, -0.57735026918962576451f},
+        { 0.57735026918962576451f, -0.57735026918962576451f},
+        { 0.57735026918962576451f,  0.57735026918962576451f},
+        {-0.57735026918962576451f,  0.57735026918962576451f}
+    };
+    // 3D quadrature points (Gauss)
+    __constant__ float c_quad_pts_3d[8][3] = {
+        {-0.57735026918962576451f, -0.57735026918962576451f, -0.57735026918962576451f},
+        { 0.57735026918962576451f, -0.57735026918962576451f, -0.57735026918962576451f},
+        { 0.57735026918962576451f,  0.57735026918962576451f, -0.57735026918962576451f},
+        {-0.57735026918962576451f,  0.57735026918962576451f, -0.57735026918962576451f},
+        {-0.57735026918962576451f, -0.57735026918962576451f,  0.57735026918962576451f},
+        { 0.57735026918962576451f, -0.57735026918962576451f,  0.57735026918962576451f},
+        { 0.57735026918962576451f,  0.57735026918962576451f,  0.57735026918962576451f},
+        {-0.57735026918962576451f,  0.57735026918962576451f,  0.57735026918962576451f}
+    };
+    // Constant 1 / sqrt(3)
+    __constant__ float c_gp = 0.57735026918962576451f;
+}
+
+// ============================================================================
+// Kernels
+// ============================================================================
+template<int dim, typename Number, int nodes_per_elem = (dim == 2) ? 4 : 8>
 __global__ void compute_viscous_heating_kernel(
     const Number* velocity,              // Input: nodal velocities [n_nodes * dim]
     Number* internal_energy_rhs,         // Output: accumulated m_i * K_i [n_nodes]
     const int* element_connectivity,     // Element->node mapping [n_elements * nodes_per_elem]
     const Number* jacobian_data,         // Jacobians [n_elements * dim * dim * 2]
-    const Number* lumped_mass_matrix,    // Lumped mass [n_nodes]
+    const Number* lumped_mass_matrix,    // Lumped mass matrix [n_nodes]
     Number mu,
     Number lambda,
     int n_elements,
@@ -22,27 +51,38 @@ __global__ void compute_viscous_heating_kernel(
     const int elem_id = blockIdx.x * blockDim.x + threadIdx.x;
     if (elem_id >= n_elements) return;
     
-    constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
-    
-    // Gauss quadrature data
-    const Number gp = Number(1.0) / sqrt(Number(3.0));
+    // Shared memory for velocity data (optimization)
+    __shared__ Number s_vel_elem[128][nodes_per_elem][dim];
+    const int tid = threadIdx.x;
     
     // Load element connectivity
     int nodes[nodes_per_elem];
-    #pragma unroll
+    #pragma unroll nodes_per_elem
     for (int n = 0; n < nodes_per_elem; ++n) {
         nodes[n] = element_connectivity[elem_id * nodes_per_elem + n];
     }
     
-    // Load element velocities
-    Number vel_elem[nodes_per_elem][dim];
-    #pragma unroll
+    // Load velocity data (optimization)
+    #pragma unroll nodes_per_elem
+    for (int n = 0; n < nodes_per_elem; ++n) {
+        for (int d = 0; d < dim; ++d) {
+            __ldg(&velocity[nodes[n] * dim + d]);
+        }
+    }
+    
+    // Load element velocities (optimization)
+    #pragma unroll nodes_per_elem
     for (int n = 0; n < nodes_per_elem; ++n) {
         #pragma unroll
         for (int d = 0; d < dim; ++d) {
-            vel_elem[n][d] = velocity[nodes[n] * dim + d];
+            s_vel_elem[tid][n][d] = velocity[nodes[n] * dim + d];
         }
     }
+    __syncthreads();
+    
+    // Create local reference
+    Number (&vel_elem)[nodes_per_elem][dim] = 
+        reinterpret_cast<Number(&)[nodes_per_elem][dim]>(s_vel_elem[tid]);
     
     // Load Jacobian and inverse
     const int jac_offset = elem_id * dim * dim * 2;
@@ -65,17 +105,22 @@ __global__ void compute_viscous_heating_kernel(
                 J[0][2] * (J[1][0] * J[2][1] - J[1][1] * J[2][0]);
     }
     
-    // Node contributions
-    Number node_contributions[nodes_per_elem] = {0};
+    // Initialize node contributions with explicit unroll
+    Number node_contributions[nodes_per_elem];
+    #pragma unroll nodes_per_elem
+    for (int n = 0; n < nodes_per_elem; ++n) {
+        node_contributions[n] = Number(0);
+    }
     
     // Loop over quadrature points
     if constexpr (dim == 2) {
-        const Number quad_pts[4][2] = {{-gp,-gp}, {gp,-gp}, {gp,gp}, {-gp,gp}};
+        // OPTIMIZATION 2: Use constant memory for quadrature points
+        const Number gp = Number(QuadratureData::c_gp);
         
-        #pragma unroll
+        #pragma unroll 4
         for (int q = 0; q < 4; ++q) {
-            const Number xi = quad_pts[q][0];
-            const Number eta = quad_pts[q][1];
+            const Number xi = Number(QuadratureData::c_quad_pts_2d[q][0]);
+            const Number eta = Number(QuadratureData::c_quad_pts_2d[q][1]);
             
             // Shape functions at quadrature point
             Number phi[4];
@@ -97,9 +142,9 @@ __global__ void compute_viscous_heating_kernel(
             
             // Transform gradients to physical element
             Number grad_phi[4][2];
-            #pragma unroll
+            #pragma unroll 4
             for (int n = 0; n < 4; ++n) {
-                #pragma unroll
+                #pragma unroll 2
                 for (int i = 0; i < 2; ++i) {
                     grad_phi[n][i] = J_inv[0][i] * grad_phi_ref[n][0] + 
                                      J_inv[1][i] * grad_phi_ref[n][1];
@@ -107,12 +152,12 @@ __global__ void compute_viscous_heating_kernel(
             }
             
             // Compute velocity gradient at quadrature point
-            Number grad_v[2][2] = {0};
-            #pragma unroll
+            Number grad_v[2][2] = {{0, 0}, {0, 0}};
+            #pragma unroll 4
             for (int n = 0; n < 4; ++n) {
-                #pragma unroll
+                #pragma unroll 2
                 for (int i = 0; i < 2; ++i) {
-                    #pragma unroll
+                    #pragma unroll 2
                     for (int j = 0; j < 2; ++j) {
                         grad_v[i][j] += vel_elem[n][i] * grad_phi[n][j];
                     }
@@ -127,40 +172,40 @@ __global__ void compute_viscous_heating_kernel(
             eps[1][1] = grad_v[1][1];
             
             // Divergence
-            Number div_v = eps[0][0] + eps[1][1];
+            const Number div_v = eps[0][0] + eps[1][1];
             
             // Stress tensor S
+            const Number lambda_bar = lambda - Number(2.0/3.0) * mu;
+            const Number two_mu = Number(2) * mu;
             Number S[2][2];
-            S[0][0] = Number(2) * mu * eps[0][0] + (lambda - Number(2.0/3.0) * mu) * div_v;
-            S[0][1] = Number(2) * mu * eps[0][1];
+            S[0][0] = two_mu * eps[0][0] + lambda_bar * div_v;
+            S[0][1] = two_mu * eps[0][1];
             S[1][0] = S[0][1];
-            S[1][1] = Number(2) * mu * eps[1][1] + (lambda - Number(2.0/3.0) * mu) * div_v;
+            S[1][1] = two_mu * eps[1][1] + lambda_bar * div_v;
             
             // Viscous heating: eps : S
-            Number heating_q = eps[0][0] * S[0][0] + Number(2) * eps[0][1] * S[0][1] + 
-                              eps[1][1] * S[1][1];
+            const Number heating_q = eps[0][0] * S[0][0] + 
+                                    Number(2) * eps[0][1] * S[0][1] + 
+                                    eps[1][1] * S[1][1];
             
             // Integration weight
             const Number weight = abs(det_J);
             
             // Distribute to nodes using shape functions
-            #pragma unroll
+            #pragma unroll 4
             for (int n = 0; n < 4; ++n) {
                 node_contributions[n] += weight * phi[n] * heating_q;
             }
         }
     } else {
         // 3D case - hexahedron with 8 nodes and 8 quadrature points
-        const Number quad_pts[8][3] = {
-            {-gp,-gp,-gp}, {gp,-gp,-gp}, {gp,gp,-gp}, {-gp,gp,-gp},
-            {-gp,-gp,gp}, {gp,-gp,gp}, {gp,gp,gp}, {-gp,gp,gp}
-        };
         
-        #pragma unroll
+        #pragma unroll 8
         for (int q = 0; q < 8; ++q) {
-            const Number xi = quad_pts[q][0];
-            const Number eta = quad_pts[q][1]; 
-            const Number zeta = quad_pts[q][2];
+            // Optimization
+            const Number xi = Number(QuadratureData::c_quad_pts_3d[q][0]);
+            const Number eta = Number(QuadratureData::c_quad_pts_3d[q][1]); 
+            const Number zeta = Number(QuadratureData::c_quad_pts_3d[q][2]);
             
             // Shape functions for Q1 hexahedron at quadrature point
             Number phi[8];
@@ -209,12 +254,12 @@ __global__ void compute_viscous_heating_kernel(
             
             // Transform gradients to physical element
             Number grad_phi[8][3];
-            #pragma unroll
+            #pragma unroll 8
             for (int n = 0; n < 8; ++n) {
-                #pragma unroll
+                #pragma unroll 3
                 for (int i = 0; i < 3; ++i) {
                     grad_phi[n][i] = 0;
-                    #pragma unroll
+                    #pragma unroll 3
                     for (int j = 0; j < 3; ++j) {
                         grad_phi[n][i] += J_inv[j][i] * grad_phi_ref[n][j];
                     }
@@ -222,12 +267,12 @@ __global__ void compute_viscous_heating_kernel(
             }
             
             // Compute velocity gradient at quadrature point
-            Number grad_v[3][3] = {0};
-            #pragma unroll
+            Number grad_v[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+            #pragma unroll 8
             for (int n = 0; n < 8; ++n) {
-                #pragma unroll
+                #pragma unroll 3
                 for (int i = 0; i < 3; ++i) {
-                    #pragma unroll
+                    #pragma unroll 3
                     for (int j = 0; j < 3; ++j) {
                         grad_v[i][j] += vel_elem[n][i] * grad_phi[n][j];
                     }
@@ -236,33 +281,35 @@ __global__ void compute_viscous_heating_kernel(
             
             // Symmetric gradient (strain rate tensor)
             Number eps[3][3];
-            #pragma unroll
+            #pragma unroll 3
             for (int i = 0; i < 3; ++i) {
-                #pragma unroll
+                #pragma unroll 3
                 for (int j = 0; j < 3; ++j) {
                     eps[i][j] = Number(0.5) * (grad_v[i][j] + grad_v[j][i]);
                 }
             }
             
             // Divergence
-            Number div_v = eps[0][0] + eps[1][1] + eps[2][2];
+            const Number div_v = eps[0][0] + eps[1][1] + eps[2][2];
             
             // Stress tensor S = 2*mu*eps + (lambda - 2/3*mu)*div*I
+            const Number lambda_bar = lambda - Number(2.0/3.0) * mu;
+            const Number two_mu = Number(2) * mu;
             Number S[3][3];
-            #pragma unroll
+            #pragma unroll 3
             for (int i = 0; i < 3; ++i) {
-                #pragma unroll
+                #pragma unroll 3
                 for (int j = 0; j < 3; ++j) {
-                    S[i][j] = Number(2) * mu * eps[i][j];
+                    S[i][j] = two_mu * eps[i][j];
                 }
-                S[i][i] += (lambda - Number(2.0/3.0) * mu) * div_v;
+                S[i][i] += lambda_bar * div_v;
             }
             
-            // Viscous heating: eps : S (double contraction)
+            // Viscous heating: eps : S
             Number heating_q = 0;
-            #pragma unroll
+            #pragma unroll 3
             for (int i = 0; i < 3; ++i) {
-                #pragma unroll
+                #pragma unroll 3
                 for (int j = 0; j < 3; ++j) {
                     heating_q += eps[i][j] * S[i][j];
                 }
@@ -272,7 +319,7 @@ __global__ void compute_viscous_heating_kernel(
             const Number weight = abs(det_J);
             
             // Distribute to nodes using shape functions
-            #pragma unroll
+            #pragma unroll 8
             for (int n = 0; n < 8; ++n) {
                 node_contributions[n] += weight * phi[n] * heating_q;
             }
@@ -280,13 +327,13 @@ __global__ void compute_viscous_heating_kernel(
     }
     
     // Distribute to global nodes with atomic add
-    #pragma unroll
+    #pragma unroll nodes_per_elem
     for (int n = 0; n < nodes_per_elem; ++n) {
         atomicAdd(&internal_energy_rhs[nodes[n]], node_contributions[n]);
     }
 }
 
-// Element connectivity class
+// Element connectivity class (unchanged)
 template<int dim, typename Number>
 class ElementConnectivity {
 public:
@@ -339,14 +386,13 @@ public:
         
         int elem_id = 0;
         for (const auto& cell : offline_data.dof_handler.active_cell_iterators()) {
-            // Get connectivity
+            // Connectivity
             cell->get_dof_indices(local_dof_indices);
             
             for (unsigned int i = 0; i < nodes_per_elem; ++i) {
                 h_connectivity[elem_id * nodes_per_elem + i] = local_dof_indices[i];
             }
-            
-            // Get Jacobian at cell center
+            // Jacobians
             fe_values.reinit(cell);
             const auto& J = fe_values.jacobian(0);
             const auto& J_inv = fe_values.inverse_jacobian(0);
@@ -375,7 +421,7 @@ public:
         
         std::cout << "    Processed " << elem_id << " elements" << std::endl;
         
-        // Transfer to GPU
+        // Transfer data to GPU
         cudaError_t err1 = cudaMalloc(&d_element_nodes, h_connectivity.size() * sizeof(int));
         cudaError_t err2 = cudaMalloc(&d_jacobian_data, h_jacobians.size() * sizeof(Number));
         
@@ -397,7 +443,6 @@ public:
         
         std::cout << "    Element connectivity transferred to GPU successfully" << std::endl;
     }
-
 };
 
 #endif
