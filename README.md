@@ -44,14 +44,14 @@ make
 ./solver_ns
 ```
 
-### These are extracts of transcient Navier-Stokes simulations (run on a laptop)
+### - These are extracts of transcient Navier-Stokes simulations (run on a laptop) -
 
-## Cylinder Mach3, resp. in 2d and 3d:
+#### Cylinder Mach3, resp. in 2d and 3d:
 
 ![Cylinder 2D](ns_mach3_2d_7.png)
 ![Cylinder 3D](ns_mach3_3d_5.png)
 
-## Sphere flying at Mach3 inside a uniform channel (contour of density, 11 millions of cells)
+#### Sphere flying at Mach3 inside a uniform channel (contour of density, 11 millions of cells):
 
 ![Sphere 3D](ns_sphere_channel_mach3.png)
 
