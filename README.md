@@ -13,7 +13,7 @@
 
 ## Description
 This project is a CUDA port of the solver ryujin (https://github.com/conservation-laws/ryujin).
-It is not a fork as most of the original code have been entirely rewritten for CUDA, and it is not an official contribution.
+It is not a fork as most of the original code has been entirely rewritten for CUDA, and it is not an official contribution.
 
 ## Key Concepts
 The approach followed here is to transfer the entire computation on the GPU to offer maximal speed.
