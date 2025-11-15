@@ -778,3 +778,26 @@ __global__ void high_order_update_iter2_kernel(
     if constexpr (dim == 3) new_U.momentum_z[i] = U_i_new_array[3];
     new_U.energy[i] = U_i_new_array[dim + 1];
 }
+
+
+// Kernel for operation sadd
+template<int dim, typename Number>
+__global__ void sadd_kernel(
+    State<dim, Number> dst,
+    State<dim, Number> src,
+    Number s, Number b,
+    int n_dofs)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_dofs) return;
+    
+    dst.rho[i] = s * dst.rho[i] + b * src.rho[i];
+    dst.momentum_x[i] = s * dst.momentum_x[i] + b * src.momentum_x[i];
+    if constexpr (dim >= 2) {
+        dst.momentum_y[i] = s * dst.momentum_y[i] + b * src.momentum_y[i];
+    }
+    if constexpr (dim == 3) {
+        dst.momentum_z[i] = s * dst.momentum_z[i] + b * src.momentum_z[i];
+    }
+    dst.energy[i] = s * dst.energy[i] + b * src.energy[i];
+}

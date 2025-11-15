@@ -245,32 +245,36 @@ public:
     static constexpr Number w_2d25 = Number(2.25);
     static constexpr Number w_m1 = Number(-1);
     static constexpr Number w_m2 = Number(-2);
-    static constexpr Number efficiency_ = Number(3);
+    static constexpr Number w_0d25 = Number(0.25);
+    static constexpr Number w_0d66 = Number(2.0 / 3.0);
+    static constexpr Number w_0d33 = Number(1.0 / 3.0);
+    static constexpr Number efficiency_s_erk33cn = Number(3.0);  // Efficiency parameter for Scheme Strang-ERK-33-CN
+    static constexpr Number efficiency_s_ssprk33cn = Number(2.0);  // Efficiency parameter for Scheme Strang-SSPRK-33-CN
+    static constexpr State<dim, Number> null_v_w = {nullptr, nullptr, nullptr, nullptr, nullptr};  // Empty stage state vectors or stage weights
 
-    Number execute_timestep(Number tau_max) {
-        State<dim, Number> null_state = {nullptr, nullptr, nullptr, nullptr, nullptr};
-        
+/*    Number execute_timestep(Number tau_max)  // Scheme Strang-ERK-33-CN
+    {
         // First explicit ERK(3,3,1) step with final result in temp_[2]
         
         prepare_state_hyperbolic(d_U);
-        Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_state, null_state, w_0, w_0, w_1, tau_max / efficiency_);
+        Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau_max / efficiency_s_erk33cn);
 
         prepare_state_hyperbolic(d_temp_0);
-        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_U, null_state, w_m1, w_0, w_2, tau);
+        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_U, null_v_w, w_m1, w_0, w_2, tau);
 
         prepare_state_hyperbolic(d_temp_1);
         compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_U, d_temp_0, w_0d75, w_m2, w_2d25, tau);
 
         // Implicit Crank-Nicolson step with final result in temp_[3]
-        parabolic_solver.compute_step_parabolic(d_temp_2, d_temp_3, tau);
+        parabolic_solver.compute_step_parabolic(d_temp_2, d_temp_3, tau);  // Devrait pas être 3.0 * tau (6 * tau / 2.0 donc 3) ?
 
         // Second explicit ERK(3,3,1) step with final result in temp_[2]
         
         prepare_state_hyperbolic(d_temp_3);
-        compute_step_hyperbolic(0, d_temp_3, d_temp_0, null_state, null_state, w_0, w_0, w_1, tau);
+        compute_step_hyperbolic(0, d_temp_3, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
 
         prepare_state_hyperbolic(d_temp_0);
-        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_temp_3, null_state, w_m1, w_0, w_2, tau);
+        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_temp_3, null_v_w, w_m1, w_0, w_2, tau);
 
         prepare_state_hyperbolic(d_temp_1);
         compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_temp_3, d_temp_0, w_0d75, w_m2, w_2d25, tau);
@@ -278,7 +282,44 @@ public:
         // Update U for next iteration
         copy_state(d_U, d_temp_2, n_dofs, stream);
 
-        return efficiency_ * tau;
+        return efficiency_s_erk33cn * tau;
+    }*/
+
+    Number execute_timestep(Number tau_max)  // Scheme Strang-SSPRK-33-CN
+    {  
+        // First explicit SSPRK 3 step with final result in temp_[0]
+        
+        prepare_state_hyperbolic(d_U);
+        Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau_max / efficiency_s_ssprk33cn);
+
+        prepare_state_hyperbolic(d_temp_0);
+        compute_step_hyperbolic(0, d_temp_0, d_temp_1, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+        sadd(d_temp_1, d_U, w_0d25, w_0d75);
+
+        prepare_state_hyperbolic(d_temp_1);
+        compute_step_hyperbolic(0, d_temp_1, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+        sadd(d_temp_0, d_U, w_0d66, w_0d33);
+
+        // Implicit Crank-Nicolson step with final result in temp_[2]
+        parabolic_solver.compute_step_parabolic(d_temp_0, d_temp_2, tau);  // 2.0 * tau / 2.0 -> tau
+
+        // Second explicit SSPRK 3 step with final result in temp_[0]:
+
+        prepare_state_hyperbolic(d_temp_2);
+        compute_step_hyperbolic(0, d_temp_2, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+
+        prepare_state_hyperbolic(d_temp_0);
+        compute_step_hyperbolic(0, d_temp_0, d_temp_1, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+        sadd(d_temp_1, d_temp_2, w_0d25, w_0d75);
+
+        prepare_state_hyperbolic(d_temp_1);
+        compute_step_hyperbolic(0, d_temp_1, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+        sadd(d_temp_0, d_temp_2, w_0d66, w_0d33);
+
+        // Update U for next iteration
+        copy_state(d_U, d_temp_0, n_dofs, stream);
+
+        return efficiency_s_ssprk33cn * tau;
     }
     
 private:
@@ -296,8 +337,8 @@ private:
     Number compute_step_hyperbolic(int stage,
         State<dim, Number>& d_old_state_vector,
         State<dim, Number>& d_new_state_vector,
-        State<dim, Number>& d_stage_state_vector_0,
-        State<dim, Number>& d_stage_state_vector_1,
+        const State<dim, Number>& d_stage_state_vector_0,
+        const State<dim, Number>& d_stage_state_vector_1,
         Number stage_weight_0,
         Number stage_weight_1,
         Number stage_weight_acc,
@@ -362,6 +403,12 @@ private:
 
         return tau;
     }
+
+    void sadd(State<dim, Number>& dst, const State<dim, Number>& src, Number s, Number b)
+    {
+        sadd_kernel<dim, Number><<<prepareConfig.blocksPerGrid, prepareConfig.threadsPerBlock, 0, stream>>>(dst, src, s, b, n_dofs);
+    }
+
 };
 
 // ============================================================================
@@ -436,8 +483,10 @@ Number_cu cuda_time_loop(
         const Number_cu w_inf = Number_cu(0);
         E_inf += Number_cu(0.5) * rho_inf * w_inf * w_inf;
     }
-    const Number_cu mu = static_cast<Number_cu>(config.mu_reference);
-    const Number_cu cv_inverse_kappa = static_cast<Number_cu>(config.cv_inverse_kappa_reference);
+/*    const Number_cu mu = static_cast<Number_cu>(config.mu_reference);
+    const Number_cu cv_inverse_kappa = static_cast<Number_cu>(config.cv_inverse_kappa_reference);*/
+    const Number_cu mu = static_cast<Number_cu>(config.mu);
+    const Number_cu cv_inverse_kappa = static_cast<Number_cu>(config.kappa);
     
     Number_cu inflow_rho = rho_inf;
     Number_cu inflow_momentum_x = rho_inf * u_inf;
@@ -448,7 +497,7 @@ Number_cu cuda_time_loop(
     
     // Initial state preparation
     const int n_precomputation_cycles = 1;
-    launch_prepare_state_vector<dim, Number_cu>(
+    prepare_state_vector<dim, Number_cu>(
         d_U, d_precomputed, d_boundary_data, 
         inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
         n_dofs, n_precomputation_cycles, compute_stream);
@@ -474,7 +523,7 @@ Number_cu cuda_time_loop(
     Number_cu t = Number_cu(0);
     unsigned int step = 0;
     unsigned int output_cycle = 0;
-    const Number_cu output_interval = config.final_time / Number_cu(100);
+    const Number_cu output_interval = static_cast<Number_cu>(config.timer_granularity);
     Number_cu next_output_time = output_interval;
     
     // Initial output - Convert SoA to AoS
@@ -540,7 +589,7 @@ Number_cu cuda_time_loop(
     auto loop_start = std::chrono::high_resolution_clock::now();
     
     while (t < config.final_time) {
-        if (step % measure_interval == 0 && step > 0) {
+        if (step % measure_interval == 0) {
             cudaEventRecord(prof_start, compute_stream);
         }
         

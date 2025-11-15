@@ -8,6 +8,7 @@
 #include <deal.II/grid/manifold_lib.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/fe/fe_q.h>
+#include <deal.II/grid/grid_in.h>
 #include "configuration.h"
 #include <cmath>
 
@@ -25,8 +26,8 @@ public:
         DIRICHLET_MOMENTUM = 6
     };
     
-    static void create_cylinder_mesh(Triangulation<2>& triangulation,
-                                     const Configuration& config) {
+/*    static void create_cylinder_mesh(Triangulation<2>& triangulation, const Configuration& config)
+    {
         const double cylinder_diameter = config.object_diameter;
         const double cylinder_position = config.object_position;
         const double length = config.length;
@@ -155,54 +156,125 @@ public:
         std::cout << "  Do-nothing (right): " << boundary_count[DO_NOTHING] << std::endl;
         std::cout << "  Slip (walls/cylinder): " << boundary_count[SLIP] << std::endl;
         std::cout << "  Dirichlet (left): " << boundary_count[DIRICHLET] << std::endl;
-    }
+    }*/
 
-    static void create_cylinder_mesh(Triangulation<3>& triangulation,
-                                         const Configuration& config) {
-            // Create 2D mesh first
-            Triangulation<2> tria_2d;
-            Configuration config_2d = config;
-            create_cylinder_mesh(tria_2d, config_2d);
-            
-            const double height = config.height;
-            
-            // Extrude 2D mesh into 3D
-            GridGenerator::extrude_triangulation(tria_2d, 4, height, triangulation, true);
-            
-            // Shift to center the mesh in z-direction
-            GridTools::shift(Tensor<1, 3>{{0, 0, -height / 2.0}}, triangulation);
-            
-            // Restore cylindrical manifold with z-axis
-            triangulation.set_manifold(0, CylindricalManifold<3>(Tensor<1, 3>{{0., 0., 1.}}, Point<3>()));
-            
-            // Set boundary ids for 3D
-            for (auto cell : triangulation.active_cell_iterators()) {
-                for (auto f : cell->face_indices()) {
-                    const auto face = cell->face(f);
-                    if (!face->at_boundary()) continue;
-                    
-                    const auto center = face->center();
-                    
-                    const double cylinder_position = config.object_position;
-                    const double length = config.length;
-                    
-                    // Right boundary: do_nothing (0)
-                    if (center[0] > length - cylinder_position - 1.e-6) {
-                        face->set_boundary_id(DO_NOTHING);
-                        continue;
-                    }
-                    
-                    // Left boundary: dirichlet (4)
-                    if (center[0] < -cylinder_position + 1.e-6) {
-                        face->set_boundary_id(DIRICHLET);
-                        continue;
-                    }
-                    
-                    // Everything else: slip (2)
-                    face->set_boundary_id(SLIP);
+/*    static void create_cylinder_mesh(Triangulation<3>& triangulation, const Configuration& config)
+    {
+        // Create 2D mesh first
+        Triangulation<2> tria_2d;
+        Configuration config_2d = config;
+        create_cylinder_mesh(tria_2d, config_2d);
+        
+        const double height = config.height;
+        
+        // Extrude 2D mesh into 3D
+        GridGenerator::extrude_triangulation(tria_2d, 4, height, triangulation, true);
+        
+        // Shift to center the mesh in z-direction
+        GridTools::shift(Tensor<1, 3>{{0, 0, -height / 2.0}}, triangulation);
+        
+        // Restore cylindrical manifold with z-axis
+        triangulation.set_manifold(0, CylindricalManifold<3>(Tensor<1, 3>{{0., 0., 1.}}, Point<3>()));
+        
+        // Set boundary ids for 3D
+        for (auto cell : triangulation.active_cell_iterators()) {
+            for (auto f : cell->face_indices()) {
+                const auto face = cell->face(f);
+                if (!face->at_boundary()) continue;
+                
+                const auto center = face->center();
+                
+                const double cylinder_position = config.object_position;
+                const double length = config.length;
+                
+                // Right boundary: do_nothing (0)
+                if (center[0] > length - cylinder_position - 1.e-6) {
+                    face->set_boundary_id(DO_NOTHING);
+                    continue;
+                }
+                
+                // Left boundary: dirichlet (4)
+                if (center[0] < -cylinder_position + 1.e-6) {
+                    face->set_boundary_id(DIRICHLET);
+                    continue;
+                }
+                
+                // Everything else: slip (2)
+                face->set_boundary_id(SLIP);
+            }
+        }
+    }*/
+
+    static void create_airfoil_mesh(Triangulation<2>& triangulation) //, const Configuration& config)
+    {
+        // Load mesh of OAT15a wing
+        const std::string filename = "../meshes/oat15a_mesh.msh";
+        std::ifstream input_file(filename);
+        if (!input_file.good()) {
+            throw std::runtime_error("Mesh file not found");
+        }
+        
+        GridIn<2> grid_in;
+        grid_in.attach_triangulation(triangulation);
+        grid_in.read_msh(input_file);
+        input_file.close();
+        
+        std::cout << "Mesh file loaded: " << filename << std::endl;
+        
+        // Load boundary id (3=NO_SLIP (airfoil), 5=DYNAMIC (far-field))
+        for (auto cell : triangulation.active_cell_iterators()) {
+            for (auto f : cell->face_indices()) {
+                if (!cell->face(f)->at_boundary()) continue;
+                
+                auto face = cell->face(f);
+                const auto ryujin_id = face->boundary_id();
+                
+                if (ryujin_id == 3) {
+                    face->set_boundary_id(NO_SLIP);  // Airfoil (no-slip boundary condition)
+                }
+                else if (ryujin_id == 5) {
+                    face->set_boundary_id(DYNAMIC);  // Far-field (dynamic boundary condition)
                 }
             }
-        }   
+        }
+        
+        print_mesh_info(triangulation, "Airfoil (OAT15a)");
+    }
+
+private:
+    template<int dim>
+    static void print_mesh_info(const Triangulation<dim>& tria, 
+                                  const std::string& name)
+    {
+        std::cout << "\n" << name << " mesh:" << std::endl;
+        std::cout << "  Active cells: " << tria.n_active_cells() << std::endl;
+        std::cout << "  Vertices: " << tria.n_vertices() << std::endl;
+        
+        std::map<types::boundary_id, unsigned int> boundary_count;
+        for (auto cell : tria.active_cell_iterators()) {
+            for (auto f : cell->face_indices()) {
+                if (cell->face(f)->at_boundary()) {
+                    boundary_count[cell->face(f)->boundary_id()]++;
+                }
+            }
+        }
+        
+        std::cout << "Boundary faces:" << std::endl;
+        for (const auto& [bid, count] : boundary_count) {
+            std::cout << "Boundary ID " << bid << ": " << count << " faces";
+            if (bid == DO_NOTHING) std::cout << " DO_NOTHING";
+            else if (bid == PERIODIC) std::cout << " PERIODIC";
+            else if (bid == SLIP) std::cout << " SLIP";
+            else if (bid == NO_SLIP) std::cout << " NO_SLIP";
+            else if (bid == DIRICHLET) std::cout << " DIRICHLET";
+            else if (bid == DYNAMIC) std::cout << " DYNAMIC (Far-field)";
+            else
+                std::cout << "error, bid = " << bid << std::endl;
+            std::cout << std::endl;
+        }
+        std::cout << std::endl;
+    }    
+
 };
 
 #endif

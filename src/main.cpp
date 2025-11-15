@@ -7,7 +7,7 @@
 // Parameters
 using Number = double;      // Precision on CPU
 using Number_cu = float;    // Precision on GPU
-constexpr int dim = 3;      // Dimension (2 or 3)
+constexpr int dim = 2;      // Dimension (2 or 3)
 
 // Transfer function offline data to GPU
 template<int dim, typename Number, typename Number_cu>
@@ -179,10 +179,10 @@ int main() {
     try {
         // Read configuration
         Configuration config;
-        config.read_parameters("../test_cases/ns-mach3-cylinder-3d.prm");
+        config.read_parameters("../test_cases/ns-oat15a-2d.prm");
         //config.final_time = 5; 
 
-        std::cout << "=== GPU-accelerated Euler solver ===" << std::endl;
+        std::cout << "=== NS solver ===" << std::endl;
         std::cout << "CPU Precision: " << (sizeof(Number) == 4 ? "float" : "double") << std::endl;
         std::cout << "GPU Precision: " << (sizeof(Number_cu) == 4 ? "float" : "double") << std::endl;
         std::cout << "Dimension: " << dim << "D" << std::endl;
@@ -194,7 +194,9 @@ int main() {
             
         // Create mesh
         dealii::Triangulation<dim> triangulation;
-        MeshGenerator::create_cylinder_mesh(triangulation, config);
+        //MeshGenerator::create_cylinder_mesh(triangulation, config);  // Cylinder test case
+        //MeshGenerator::create_sphere_in_channel_mesh(triangulation, config);  // Sphere test case
+        MeshGenerator::create_airfoil_mesh(triangulation);  // Onera OAT15a airfoil test case        
         std::cout << "Mesh: " << triangulation.n_active_cells() << " cells, "
                   << triangulation.n_vertices() << " vertices" << std::endl;
         

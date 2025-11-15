@@ -1,4 +1,4 @@
-// configuration.h
+// configuration.h - Minimal configuration for mesh-reading solver
 #ifndef CONFIGURATION_H
 #define CONFIGURATION_H
 
@@ -6,46 +6,54 @@
 #include <string>
 #include <array>
 #include <sstream>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
 
 class Configuration {
 public:
-    // Simulation parameters
-    std::string basename = "mach3-cylinder-2d";
-    double final_time = 10.0;
+    // A - TimeLoop
+    std::string basename = "simulation";
+    double final_time = 1.0;
+    double timer_granularity = 0.01;
+    
+    // B - Equation
+    int dimension = 2;
+    double gamma = 1.4;
+    double mu = 0.0;      // Dynamic viscosity (0 = Euler)
+    double lambda = 0.0;  // Bulk viscosity
+    double kappa = 0.0;   // Thermal conductivity (0 = Euler)
+    
+    // C - Discretization
+    int mesh_refinement = 0;  // Refinement level for loaded mesh
+    
+    // E - InitialValues (primitive state: rho, velocity_magnitude, pressure)
+    std::array<double, 3> primitive_state = {{1.4, 3.0, 1.0}};
+    std::array<double, 2> direction = {{1.0, 0.0}};
+    
+    // H - TimeIntegrator
+    double cfl_min = 0.9;
+    double cfl_max = 0.9;
     double cfl_number = 0.9;
     
-    // Physics parameters
-    static constexpr double gamma = 1.4;
-    std::array<double, 3> primitive_state = {{1.4, 3.0, 1.0}}; // [rho, u, p]
-    
-    // Geometry parameters
-    double height = 2.0;
-    double length = 4.0;
-    double object_diameter = 0.5;
-    double object_position = 0.6;
-    int mesh_refinement = 2;
-    
-    // Scheme parameters
-    double relaxation_factor = 1.0;
-    
-    // Navier-Stokes parameters
-    double reynolds_number = 1000.0;
-    double prandtl_number = 0.75;
-    double mach_number = 3.0;
-    double mu_reference = 1.0e-3;
-    double cv_inverse_kappa_reference = 1.866666666666666e-2;
-    bool use_navier_stokes = true;  // Default to Euler
+    // Helpers
+    bool is_navier_stokes() const { return mu > 0.0 || kappa > 0.0; }
     
     void read_parameters(const std::string& filename) {
+        std::ifstream file_check(filename);
+        if (!file_check.good()) {
+            throw std::runtime_error("Parameter file not found: " + filename);
+        }
+        file_check.close();
+        
         dealii::ParameterHandler prm;
         
         // A - TimeLoop
         prm.enter_subsection("A - TimeLoop");
         {
-            prm.declare_entry("basename", "mach3-cylinder-2d", dealii::Patterns::Anything());
-            prm.declare_entry("enable output full", "true", dealii::Patterns::Bool());
-            prm.declare_entry("final time", "10.0", dealii::Patterns::Double());
-            prm.declare_entry("timer granularity", "0.1", dealii::Patterns::Double());
+            prm.declare_entry("basename", "simulation", dealii::Patterns::Anything());
+            prm.declare_entry("final time", "1.0", dealii::Patterns::Double());
+            prm.declare_entry("timer granularity", "0.01", dealii::Patterns::Double());
         }
         prm.leave_subsection();
         
@@ -53,40 +61,24 @@ public:
         prm.enter_subsection("B - Equation");
         {
             prm.declare_entry("dimension", "2", dealii::Patterns::Integer());
-            prm.declare_entry("equation", "euler", dealii::Patterns::Anything());
             prm.declare_entry("gamma", "1.4", dealii::Patterns::Double());
-            prm.declare_entry("reynolds number", "1000", dealii::Patterns::Double());
-            prm.declare_entry("prandtl number", "0.75", dealii::Patterns::Double());
-            prm.declare_entry("mach number", "3.0", dealii::Patterns::Double());
-            prm.declare_entry("mu reference", "1.0e-3", dealii::Patterns::Double());
+            prm.declare_entry("mu", "0.0", dealii::Patterns::Double());
+            prm.declare_entry("lambda", "0.0", dealii::Patterns::Double());
+            prm.declare_entry("kappa", "0.0", dealii::Patterns::Double());
         }
         prm.leave_subsection();
         
         // C - Discretization
         prm.enter_subsection("C - Discretization");
         {
-            prm.declare_entry("geometry", "cylinder", dealii::Patterns::Anything());
-            prm.declare_entry("mesh refinement", "2", dealii::Patterns::Integer());
-            
-            prm.enter_subsection("cylinder");
-            {
-                prm.declare_entry("height", "2", dealii::Patterns::Double());
-                prm.declare_entry("length", "4", dealii::Patterns::Double());
-                prm.declare_entry("object diameter", "0.5", dealii::Patterns::Double());
-                prm.declare_entry("object position", "0.6", dealii::Patterns::Double());
-            }
-            prm.leave_subsection();
+            prm.declare_entry("mesh refinement", "0", dealii::Patterns::Integer());
         }
         prm.leave_subsection();
         
         // E - InitialValues
         prm.enter_subsection("E - InitialValues");
         {
-            prm.declare_entry("configuration", "uniform", dealii::Patterns::Anything());
             prm.declare_entry("direction", "1, 0", dealii::Patterns::Anything());
-            prm.declare_entry("position", "1, 0", dealii::Patterns::Anything());
-            prm.declare_entry("perturbation", "0", dealii::Patterns::Double());
-            
             prm.enter_subsection("uniform");
             {
                 prm.declare_entry("primitive state", "1.4, 3, 1", dealii::Patterns::Anything());
@@ -100,20 +92,10 @@ public:
         {
             prm.declare_entry("cfl min", "0.90", dealii::Patterns::Double());
             prm.declare_entry("cfl max", "0.90", dealii::Patterns::Double());
-            prm.declare_entry("cfl recovery strategy", "none", dealii::Patterns::Anything());
-            prm.declare_entry("time stepping scheme", "erk 33", dealii::Patterns::Anything());
         }
         prm.leave_subsection();
         
-        // J - VTUOutput
-        prm.enter_subsection("J - VTUOutput");
-        {
-            prm.declare_entry("use mpi io", "true", dealii::Patterns::Bool());
-            prm.declare_entry("schlieren beta", "10", dealii::Patterns::Double());
-        }
-        prm.leave_subsection();
-        
-        // Parse input file
+        // Parse file
         prm.parse_input(filename);
         
         // Read values
@@ -121,41 +103,38 @@ public:
         {
             basename = prm.get("basename");
             final_time = prm.get_double("final time");
+            timer_granularity = prm.get_double("timer granularity");
         }
         prm.leave_subsection();
         
         prm.enter_subsection("B - Equation");
         {
-            std::string equation_type = prm.get("equation");
-            use_navier_stokes = (equation_type == "navier_stokes");
-            reynolds_number = prm.get_double("reynolds number");
-            prandtl_number = prm.get_double("prandtl number");
-            mach_number = prm.get_double("mach number");
-            mu_reference = prm.get_double("mu reference");
+            dimension = prm.get_integer("dimension");
+            gamma = prm.get_double("gamma");
+            mu = prm.get_double("mu");
+            lambda = prm.get_double("lambda");
+            kappa = prm.get_double("kappa");
         }
         prm.leave_subsection();
         
         prm.enter_subsection("C - Discretization");
         {
             mesh_refinement = prm.get_integer("mesh refinement");
-            prm.enter_subsection("cylinder");
-            {
-                height = prm.get_double("height");
-                length = prm.get_double("length");
-                object_diameter = prm.get_double("object diameter");
-                object_position = prm.get_double("object position");
-            }
-            prm.leave_subsection();
         }
         prm.leave_subsection();
         
         prm.enter_subsection("E - InitialValues");
         {
+            // Parse direction
+            std::string direction_str = prm.get("direction");
+            std::stringstream ss_dir(direction_str);
+            char comma;
+            ss_dir >> direction[0] >> comma >> direction[1];
+            
             prm.enter_subsection("uniform");
             {
-                std::string state_string = prm.get("primitive state");
-                std::stringstream ss(state_string);
-                char comma;
+                std::string state_str = prm.get("primitive state");
+                std::stringstream ss(state_str);
                 ss >> primitive_state[0] >> comma >> primitive_state[1] >> comma >> primitive_state[2];
             }
             prm.leave_subsection();
@@ -164,33 +143,41 @@ public:
         
         prm.enter_subsection("H - TimeIntegrator");
         {
-            cfl_number = prm.get_double("cfl max");
+            cfl_min = prm.get_double("cfl min");
+            cfl_max = prm.get_double("cfl max");
+            cfl_number = cfl_min;
         }
         prm.leave_subsection();
         
-        // Compute derived viscosity parameters
-        if (use_navier_stokes) {
-            // Reference length = cylinder diameter
-            double L_ref = object_diameter;
-            // Reference velocity = Mach * sqrt(gamma * p_inf / rho_inf)
-            double a_inf = std::sqrt(gamma * primitive_state[2] / primitive_state[0]);
-            double U_ref = mach_number * a_inf;
-            // mu = rho_inf * U_ref * L_ref / Re
-            mu_reference = primitive_state[0] * U_ref * L_ref / reynolds_number;
-            // cv_inverse_kappa = kappa / cv = kappa * gamma / (gamma - 1)
-            cv_inverse_kappa_reference = mu_reference * gamma / ((gamma - 1.0) * prandtl_number) * gamma / (gamma - 1.0);
+        print_configuration();
+    }
+    
+private:
+    void print_configuration() const {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Configuration" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "  Basename: " << basename << std::endl;
+        std::cout << "  Dimension: " << dimension << "D" << std::endl;
+        std::cout << "  Physics: " << (is_navier_stokes() ? "Navier-Stokes" : "Euler") << std::endl;
+        std::cout << "  Final time: " << final_time << std::endl;
+        std::cout << "  Output interval: " << timer_granularity << std::endl;
+        std::cout << "  CFL: " << cfl_number << std::endl;
+        std::cout << "  Mesh refinement: " << mesh_refinement << std::endl;
+        
+        std::cout << "\n  Physics parameters:" << std::endl;
+        std::cout << "    gamma: " << gamma << std::endl;
+        if (is_navier_stokes()) {
+            std::cout << "    mu: " << mu << std::endl;
+            std::cout << "    kappa: " << kappa << std::endl;
         }
         
-        std::cout << "Parameters successfully read from: " << filename << std::endl;
-        std::cout << "  Equation type: " << (use_navier_stokes ? "Navier-Stokes" : "Euler") << std::endl;
-        std::cout << "  Final time: " << final_time << std::endl;
-        std::cout << "  Mesh refinement: " << mesh_refinement << std::endl;
-        if (use_navier_stokes) {
-            std::cout << "  Reynolds number: " << reynolds_number << std::endl;
-            std::cout << "  Prandtl number: " << prandtl_number << std::endl;
-            std::cout << "  Dynamic viscosity: " << mu_reference << std::endl;
-            std::cout << "  cv_inverse_kappa: " << cv_inverse_kappa_reference << std::endl;
-        }
+        std::cout << "\n  Initial state (primitive):" << std::endl;
+        std::cout << "    rho: " << primitive_state[0] << std::endl;
+        std::cout << "    u: " << primitive_state[1] << std::endl;
+        std::cout << "    p: " << primitive_state[2] << std::endl;
+        std::cout << "    direction: [" << direction[0] << ", " << direction[1] << "]" << std::endl;
+        std::cout << "========================================\n" << std::endl;
     }
 };
 

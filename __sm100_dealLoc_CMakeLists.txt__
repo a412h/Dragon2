@@ -1,0 +1,60 @@
+cmake_minimum_required(VERSION 3.18)
+
+set(PROJECT_NAME solver_ns)
+set(SRCS ../)
+
+project(${PROJECT_NAME} LANGUAGES CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wfatal-errors")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wfatal-errors")
+
+set(CMAKE_CUDA_ARCHITECTURES 100)
+message(STATUS "Compiling for architecture 100")
+
+set(DEAL_II_DIR "/home/z0/Logiciels/Dealii/dealii-9.7.1/install" CACHE PATH "deal.II directory" FORCE)
+
+find_package(deal.II 9.3 REQUIRED 
+    HINTS ${DEAL_II_DIR}
+    NO_DEFAULT_PATH)
+find_package(CUDAToolkit REQUIRED)
+find_package(OpenMP REQUIRED)
+
+add_executable(${PROJECT_NAME}
+    ${SRCS}main.cpp
+    ${SRCS}cuda_time_loop.cu 
+    ${SRCS}hyperbolic_kernels.cu)
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_RUNTIME_LIBRARY Shared)
+
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:
+        -O3 --use_fast_math
+        --gpu-architecture=sm_100
+        --threads 256
+        --maxrregcount=64
+        -Xptxas=-O3
+        --ptxas-options=-allow-expensive-optimizations=true
+        -Xcompiler=-O3,-march=native,-ffast-math,-funroll-loops,-ftree-vectorize
+        --extra-device-vectorization>
+    $<$<COMPILE_LANGUAGE:CXX>:
+        -O3 -march=native -mtune=native
+        -ffast-math -funroll-loops -ftree-vectorize
+        -fopenmp -DNDEBUG>)
+
+target_link_libraries(${PROJECT_NAME}
+    ${DEAL_II_LIBRARIES}
+    CUDA::cudart
+    CUDA::cublas
+    OpenMP::OpenMP_CXX)
+
+deal_ii_setup_target(${PROJECT_NAME})

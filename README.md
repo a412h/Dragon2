@@ -9,7 +9,7 @@
 </pre>
 </div>
 
-# DRAGON II - an experimental CUDA port of the solver ryujin - in development
+# DRAGON II - Experimental CUDA Navier-Stokes Solver - in development
 
 ## Description
 This project is a CUDA port of the solver ryujin (https://github.com/conservation-laws/ryujin).
@@ -27,7 +27,7 @@ The approach followed here is to transfer the entire computation on the GPU to o
 Tested on Ubuntu 24.04
 
 ## Prerequisites
-Tested with a Nvidia RTX 4000 generation card
+Tested with Nvidia RTX 4000 and RTX 5000 generation cards
 
 ## Build and run
 
@@ -54,3 +54,7 @@ make
 
 ![Sphere 3D](ns_sphere_channel_mach3.png)
 
+
+#### Flow transonic with wing Onera OAT15a (contour of density, 2 millions of points):
+
+![Flow 2D](ns_oat15a.png)
