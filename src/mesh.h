@@ -26,7 +26,7 @@ public:
         DIRICHLET_MOMENTUM = 6
     };
     
-/*    static void create_cylinder_mesh(Triangulation<2>& triangulation, const Configuration& config)
+    static void create_cylinder_mesh(Triangulation<2>& triangulation, const Configuration& config)
     {
         const double cylinder_diameter = config.object_diameter;
         const double cylinder_position = config.object_position;
@@ -156,9 +156,9 @@ public:
         std::cout << "  Do-nothing (right): " << boundary_count[DO_NOTHING] << std::endl;
         std::cout << "  Slip (walls/cylinder): " << boundary_count[SLIP] << std::endl;
         std::cout << "  Dirichlet (left): " << boundary_count[DIRICHLET] << std::endl;
-    }*/
+    }
 
-/*    static void create_cylinder_mesh(Triangulation<3>& triangulation, const Configuration& config)
+    static void create_cylinder_mesh(Triangulation<3>& triangulation, const Configuration& config)
     {
         // Create 2D mesh first
         Triangulation<2> tria_2d;
@@ -203,7 +203,45 @@ public:
                 face->set_boundary_id(SLIP);
             }
         }
-    }*/
+    }
+
+    static void create_sphere_in_channel_mesh(Triangulation<3>& triangulation, const Configuration& config)
+    {
+        const unsigned int length_before_sphere = config.length_before_sphere;
+        const unsigned int length_after_sphere = config.length_after_sphere;
+        const unsigned int height_below_sphere = config.height_below_sphere;
+        const unsigned int height_above_sphere = config.height_above_sphere;
+        const unsigned int depth = config.depth;
+        const int mesh_refinement = config.mesh_refinement;
+
+        const std::vector<unsigned int> lengths_and_heights = {length_before_sphere, length_after_sphere, height_below_sphere, height_above_sphere};
+
+        dealii::GridGenerator::uniform_channel_with_sphere(
+            triangulation,
+            lengths_and_heights,
+            depth,
+            true);  // Colorize (for boundary IDs)
+
+        if (mesh_refinement > 0)
+            triangulation.refine_global(mesh_refinement);
+
+        for (auto &face : triangulation.active_face_iterators())
+        {
+            if (!face->at_boundary())
+                continue;
+
+            const auto bid = face->boundary_id();
+            
+            if (bid == 0)  // Inlet
+                face->set_boundary_id(DIRICHLET);
+            else if (bid == 1)  // Outlet
+                face->set_boundary_id(DO_NOTHING);
+            else if (bid == 2)  // Sphere surface
+                face->set_boundary_id(SLIP);
+            else if (bid >= 3 && bid <= 6)  // Channel walls
+                face->set_boundary_id(DO_NOTHING);
+        }    
+    }    
 
     static void create_airfoil_mesh(Triangulation<2>& triangulation) //, const Configuration& config)
     {

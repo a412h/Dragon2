@@ -4,7 +4,7 @@
 #
 # Free-stream: Air at sea level, Mach 0.73, 3.5° angle of attack
 # Chord: c = 0.2300m
-# Reynolds: ~3×10^6
+# Reynolds: ~3*10^6
 #
 # References:
 # [1] S. Deck, N. Renard. Towards an enhanced protection of attached
@@ -29,7 +29,7 @@ subsection B - Equation
 
 	# Air at sea level
 	set gamma  = 1.401
-	set mu     = 1.789e-5    # Dynamic viscosity [Pa·s]
+	set mu     = 1.789e-5    # Dynamic viscosity [Pa*s]
 	set lambda = 0           # Bulk viscosity
 	set kappa  = 3.616e-5    # Scaled thermal conductivity c_v^{-1} kappa
 end

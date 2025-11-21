@@ -179,7 +179,6 @@ public:
         const int threads = 256;
         const int blocks = (n_dofs + threads - 1) / threads;
         
-        // Diagnostic - compute norms on GPU
         Number rhs_norm;
         if constexpr (std::is_same_v<Number, float>) {
             cublasSnrm2(cublas_handle, n_dofs, energy_rhs, 1, &rhs_norm);

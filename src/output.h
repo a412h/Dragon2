@@ -190,7 +190,7 @@ private:
                                 
                                 const Number drho = rho[j] - rho_i;
                                 
-                                // A += dx ⊗ dx, b += drho * dx
+                                // A += dx . dx, b += drho * dx
                                 for (unsigned int d1 = 0; d1 < dim; ++d1) {
                                     b[d1] += drho * dx[d1];
                                     for (unsigned int d2 = 0; d2 < dim; ++d2) {

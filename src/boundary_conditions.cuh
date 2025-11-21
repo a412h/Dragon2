@@ -137,13 +137,13 @@ __device__ void apply_boundary_conditions_device(
                 if constexpr (dim >= 2) momentum[1] = U.momentum_y[idx];
                 if constexpr (dim == 3) momentum[2] = U.momentum_z[idx];
                 
-                // Compute dot product (m · n)
+                // Compute dot product (m, n)
                 Number m_dot_n = Number(0);
                 for (int d = 0; d < dim; ++d) {
                     m_dot_n += momentum[d] * normal[d];
                 }
                 
-                // Remove normal component: m = m - (m · n) * n
+                // Remove normal component: m = m - (m, n) * n
                 U.momentum_x[idx] = momentum[0] - m_dot_n * normal[0];
                 if constexpr (dim >= 2) U.momentum_y[idx] = momentum[1] - m_dot_n * normal[1];
                 if constexpr (dim == 3) U.momentum_z[idx] = momentum[2] - m_dot_n * normal[2];
@@ -155,7 +155,7 @@ __device__ void apply_boundary_conditions_device(
                 if constexpr (dim == 3) U.momentum_z[idx] = Number(0);
             }
             else if (bid == 5) {  // Dynamic boundary condition
-                // Compute ormal vector
+                // Compute normal vector
                 Number normal[dim];
                 for (int d = 0; d < dim; ++d) {
                     normal[d] = boundary_data.boundary_normals[b * dim + d];

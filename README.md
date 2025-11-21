@@ -50,7 +50,7 @@ make
 ![Cylinder 2D](ns_mach3_2d_7.png)
 ![Cylinder 3D](ns_mach3_3d_5.png)
 
-#### Sphere flying at Mach3 inside a uniform channel (contour of density, 2 millions of cells):
+#### Sphere flying at Mach3 inside a uniform channel (contour of density, 1.6 millions of cells):
 
 ![Sphere 3D](ns_sphere_channel_mach3.png)
 
