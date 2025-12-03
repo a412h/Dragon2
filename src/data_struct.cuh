@@ -99,6 +99,7 @@ struct CouplingPairs {
 struct Sparsity {
     int* row_offsets;
     int* col_indices;
+    int* transpose_indices;
 };
 
 // P_ij and r_i structures for SoA data

@@ -16,6 +16,48 @@
 #include "offline_data.h"
 #include "parabolic_solver.cuh"
 
+
+// ============================================================================
+// ============================================================================
+void compute_transpose_indices(
+    int* d_transpose_indices,
+    const int* d_row_offsets,
+    const int* d_col_indices,
+    int n_dofs,
+    int nnz)
+{
+    std::vector<int> h_row_offsets(n_dofs + 1);
+    std::vector<int> h_col_indices(nnz);
+    std::vector<int> h_transpose_indices(nnz, -1);  // -1 for no transpose (diagonal)
+    
+    CUDA_CHECK(cudaMemcpy(h_row_offsets.data(), d_row_offsets,
+                          (n_dofs + 1) * sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_col_indices.data(), d_col_indices,
+                          nnz * sizeof(int), cudaMemcpyDeviceToHost));
+    
+    for (int i = 0; i < n_dofs; ++i) {
+        const int row_start = h_row_offsets[i];
+        const int row_end = h_row_offsets[i + 1];
+        
+        for (int idx = row_start + 1; idx < row_end; ++idx) {
+            const int j = h_col_indices[idx];
+            
+            const int row_start_j = h_row_offsets[j];
+            const int row_end_j = h_row_offsets[j + 1];
+            
+            for (int idx_j = row_start_j + 1; idx_j < row_end_j; ++idx_j) {
+                if (h_col_indices[idx_j] == i) {
+                    h_transpose_indices[idx] = idx_j;
+                    break;
+                }
+            }
+        }
+    }
+
+    CUDA_CHECK(cudaMemcpy(d_transpose_indices, h_transpose_indices.data(),
+                          nnz * sizeof(int), cudaMemcpyHostToDevice));
+}
+
 // ============================================================================
 // Functions for SoA memory operations
 // ============================================================================
@@ -228,9 +270,15 @@ public:
         std::cout << "    Low-order kernel: " << lowOrderConfig.threadsPerBlock << " threads/block" << std::endl;
         std::cout << "    Limiter kernel: " << limiterConfig.threadsPerBlock << " threads/block" << std::endl;
         
-        // Configure L1 cache for memory-bound kernels
         cudaFuncSetCacheConfig(low_order_update_kernel<dim, Number>, cudaFuncCachePreferL1);
         cudaFuncSetCacheConfig(compute_limiter_kernel<dim, Number>, cudaFuncCachePreferL1);
+
+        compute_transpose_indices(
+            const_cast<int*>(d_sparsity.transpose_indices),
+            d_sparsity.row_offsets,
+            d_sparsity.col_indices,
+            n_dofs, nnz);
+        std::cout << "Transpose indices computed" << std::endl;        
     }
     
     ~StageExecutor() {
@@ -252,7 +300,7 @@ public:
     static constexpr Number efficiency_s_ssprk33cn = Number(2.0);  // Efficiency parameter for Scheme Strang-SSPRK-33-CN
     static constexpr State<dim, Number> null_v_w = {nullptr, nullptr, nullptr, nullptr, nullptr};  // Empty stage state vectors or stage weights
 
-/*    Number execute_timestep(Number tau_max)  // Scheme Strang-ERK-33-CN
+    Number execute_timestep(Number tau_max)  // Scheme Strang-ERK-33-CN
     {
         // First explicit ERK(3,3,1) step with final result in temp_[2]
         
@@ -283,9 +331,9 @@ public:
         copy_state(d_U, d_temp_2, n_dofs, stream);
 
         return efficiency_s_erk33cn * tau;
-    }*/
+    }
 
-    Number execute_timestep(Number tau_max)  // Scheme Strang-SSPRK-33-CN
+/*    Number execute_timestep(Number tau_max)  // Scheme Strang-SSPRK-33-CN
     {  
         // First explicit SSPRK 3 step with final result in temp_[0]
         
@@ -320,7 +368,7 @@ public:
         copy_state(d_U, d_temp_0, n_dofs, stream);
 
         return efficiency_s_ssprk33cn * tau;
-    }
+    }*/
     
 private:
 
@@ -502,13 +550,19 @@ Number_cu cuda_time_loop(
         inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
         n_dofs, n_precomputation_cycles, compute_stream);
     CUDA_CHECK(cudaStreamSynchronize(compute_stream));
+
+    // Transpose indices set
+    int* d_transpose_indices;
+    CUDA_CHECK(cudaMalloc(&d_transpose_indices, nnz_mij * sizeof(int)));
+    Sparsity d_sparsity_with_transpose = d_sparsity;
+    d_sparsity_with_transpose.transpose_indices = d_transpose_indices;    
     
     // Create stage executor
     StageExecutor<dim, Number_cu> stage_executor(
         d_U, d_temp_0, d_temp_1, d_temp_2, d_temp_3, d_new_U,
         d_pressure, d_speed_of_sound, d_precomputed, d_alpha_i,
         d_dij, d_pij, d_ri, d_bounds, d_lij, d_lij_next,
-        d_mij_matrix, d_mi_matrix, d_mi_inv_matrix, d_cij_matrix, d_sparsity,
+        d_mij_matrix, d_mi_matrix, d_mi_inv_matrix, d_cij_matrix, d_sparsity_with_transpose,
         d_boundary_data, d_coupling_pairs, 
         inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
         measure_of_omega, static_cast<Number_cu>(config.cfl_number),
@@ -723,6 +777,7 @@ Number_cu cuda_time_loop(
     CUDA_CHECK(cudaEventDestroy(prof_stop));
     CUDA_CHECK(cudaStreamDestroy(compute_stream));
     CUDA_CHECK(cudaStreamDestroy(output_stream));
+    CUDA_CHECK(cudaFree(d_transpose_indices));
     
     return t;
 }

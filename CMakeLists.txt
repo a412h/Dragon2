@@ -18,7 +18,7 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wfatal-errors")
 set(CMAKE_CUDA_ARCHITECTURES 100)
 message(STATUS "Compiling for architecture 100")
 
-set(DEAL_II_DIR "/home/z0/Logiciels/Dealii/dealii-9.7.1/install" CACHE PATH "deal.II directory" FORCE)
+set(DEAL_II_DIR "dealii/install" CACHE PATH "deal.II directory" FORCE)
 
 find_package(deal.II 9.3 REQUIRED 
     HINTS ${DEAL_II_DIR}

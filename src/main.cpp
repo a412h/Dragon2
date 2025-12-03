@@ -7,7 +7,7 @@
 // Parameters
 using Number = double;      // Precision on CPU
 using Number_cu = float;    // Precision on GPU
-constexpr int dim = 2;      // Dimension (2 or 3)
+constexpr int dim = 3;      // Dimension (2 or 3)
 
 // Transfer function offline data to GPU
 template<int dim, typename Number, typename Number_cu>
@@ -179,8 +179,8 @@ int main() {
     try {
         // Read configuration
         Configuration config;
-        config.read_parameters("../test_cases/ns-oat15a-2d.prm");
-        //config.final_time = 5; 
+        //config.read_parameters("../test_cases/ns-oat15a-2d.prm");
+        config.read_parameters("../test_cases/ns-mach3-sphere-3d.prm");
 
         std::cout << "=== NS solver ===" << std::endl;
         std::cout << "CPU Precision: " << (sizeof(Number) == 4 ? "float" : "double") << std::endl;
@@ -195,8 +195,9 @@ int main() {
         // Create mesh
         dealii::Triangulation<dim> triangulation;
         //MeshGenerator::create_cylinder_mesh(triangulation, config);  // Cylinder test case
-        //MeshGenerator::create_sphere_in_channel_mesh(triangulation, config);  // Sphere test case
-        MeshGenerator::create_airfoil_mesh(triangulation);  // Onera OAT15a airfoil test case        
+        MeshGenerator::create_sphere_in_channel_mesh(triangulation, config);  // Sphere test case
+        //MeshGenerator::create_airfoil_mesh(triangulation);  // Onera OAT15a airfoil test case        
+        
         std::cout << "Mesh: " << triangulation.n_active_cells() << " cells, "
                   << triangulation.n_vertices() << " vertices" << std::endl;
         
@@ -279,7 +280,9 @@ int main() {
         std::cout << "Initial conditions transferred" << std::endl;
 
         // Main time loop
-        std::cout << "\nStarting time integration..." << std::endl;
+        const auto t0 = std::chrono::high_resolution_clock::now();
+        const std::time_t time_now = std::chrono::system_clock::to_time_t(t0);
+        std::cout << "\nStarting time loop, at time: " << std::ctime(&time_now);
         Number_cu t = cuda_time_loop<dim, Number_cu>(
             d_mass_matrix,
             d_lumped_mass,
@@ -297,8 +300,11 @@ int main() {
             offline_data,
             &output);
 
-        std::cout << "\nSimulation complete!" << std::endl;
+        std::cout << "Simulation complete!" << std::endl;
         std::cout << "Final time: " << t << std::endl;
+        const auto t1 = std::chrono::high_resolution_clock::now();
+        const auto duration = std::chrono::duration<double>(t1 - t0).count();
+        std::cout << "Comp. time (sec.): " << duration << std::endl;
 
         // Free GPU memory
         free_state(d_U);

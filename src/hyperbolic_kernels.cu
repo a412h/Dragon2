@@ -282,21 +282,21 @@ __global__ void compute_diagonal_and_tau_kernel(
 // KERNEL 4: Low-order update
 // ============================================================================
 template<int dim, typename Number>
-__global__ void low_order_update_kernel(
+__global__ void __launch_bounds__(128, 4) low_order_update_kernel(
     const State<dim, Number> U,
     State<dim, Number> new_U,
-    const Number* pressure,
-    const Number* alpha_i,
-    const Number* dij_matrix,
+    const Number* __restrict__ pressure,
+    const Number* __restrict__ alpha_i,
+    const Number* __restrict__ dij_matrix,
     Pij<dim, Number> pij_matrix,
     Ri<dim, Number> ri,
-    Number* bounds,
+    Number* __restrict__ bounds,
     const Sparsity& sparsity,
     const MijMatrix<Number>& mij_matrix,
     const MiMatrix<Number>& mi_matrix,
     const MiMatrixInverse<Number>& mi_inv_matrix,
     const CijMatrix<dim, Number>& cij_matrix,
-    const Number* precomputed,
+    const Number* __restrict__ precomputed,
     Number tau,
     Number measure_of_omega,
     const State<dim, Number> stage_U_0,
@@ -313,24 +313,23 @@ __global__ void low_order_update_kernel(
     using PF = PhysicsFunctions<dim, Number>;
     using LimiterType = Limiter<dim, Number>;
     
-    const int row_start = sparsity.row_offsets[i];
-    const int row_end = sparsity.row_offsets[i + 1];
+    const int row_start = __ldg(&sparsity.row_offsets[i]);
+    const int row_end = __ldg(&sparsity.row_offsets[i + 1]);
     const int row_length = row_end - row_start;
     
     if (row_length == 1) return;
     
-    const Number alpha_i_local = alpha_i[i];
-    const Number m_i_local = mi_matrix.values[i];
-    const Number m_i_inv_local = mi_inv_matrix.values[i];
-    const Number pressure_i_local = pressure[i];
+    const Number alpha_i_local = __ldg(&alpha_i[i]);
+    const Number m_i_local = __ldg(&mi_matrix.values[i]);
+    const Number m_i_inv_local = __ldg(&mi_inv_matrix.values[i]);
+    const Number pressure_i_local = __ldg(&pressure[i]);
     
-    // Load U_i into array (optimization)
     Number U_i_array[dim + 2];
-    U_i_array[0] = U.rho[i];
-    U_i_array[1] = U.momentum_x[i];
-    if constexpr (dim >= 2) U_i_array[2] = U.momentum_y[i];
-    if constexpr (dim == 3) U_i_array[3] = U.momentum_z[i];
-    U_i_array[dim + 1] = U.energy[i];
+    U_i_array[0] = __ldg(&U.rho[i]);
+    U_i_array[1] = __ldg(&U.momentum_x[i]);
+    if constexpr (dim >= 2) U_i_array[2] = __ldg(&U.momentum_y[i]);
+    if constexpr (dim == 3) U_i_array[3] = __ldg(&U.momentum_z[i]);
+    U_i_array[dim + 1] = __ldg(&U.energy[i]);
     
     Number U_i_new_array[dim + 2];
     #pragma unroll
@@ -340,53 +339,50 @@ __global__ void low_order_update_kernel(
     
     const auto flux_i = PF::f_local(U_i_array);
     
-    // Stage fluxes
     Flux<dim, Number> flux_iHs[3];
     if (stage >= 1 && stage_U_0.rho != nullptr) {
         Number U_stage[dim + 2];
-        U_stage[0] = stage_U_0.rho[i];
-        U_stage[1] = stage_U_0.momentum_x[i];
-        if constexpr (dim >= 2) U_stage[2] = stage_U_0.momentum_y[i];
-        if constexpr (dim == 3) U_stage[3] = stage_U_0.momentum_z[i];
-        U_stage[dim + 1] = stage_U_0.energy[i];
+        U_stage[0] = __ldg(&stage_U_0.rho[i]);
+        U_stage[1] = __ldg(&stage_U_0.momentum_x[i]);
+        if constexpr (dim >= 2) U_stage[2] = __ldg(&stage_U_0.momentum_y[i]);
+        if constexpr (dim == 3) U_stage[3] = __ldg(&stage_U_0.momentum_z[i]);
+        U_stage[dim + 1] = __ldg(&stage_U_0.energy[i]);
         flux_iHs[0] = PF::f_local(U_stage);
     }
     if (stage >= 2 && stage_U_1.rho != nullptr) {
         Number U_stage[dim + 2];
-        U_stage[0] = stage_U_1.rho[i];
-        U_stage[1] = stage_U_1.momentum_x[i];
-        if constexpr (dim >= 2) U_stage[2] = stage_U_1.momentum_y[i];
-        if constexpr (dim == 3) U_stage[3] = stage_U_1.momentum_z[i];
-        U_stage[dim + 1] = stage_U_1.energy[i];
+        U_stage[0] = __ldg(&stage_U_1.rho[i]);
+        U_stage[1] = __ldg(&stage_U_1.momentum_x[i]);
+        if constexpr (dim >= 2) U_stage[2] = __ldg(&stage_U_1.momentum_y[i]);
+        if constexpr (dim == 3) U_stage[3] = __ldg(&stage_U_1.momentum_z[i]);
+        U_stage[dim + 1] = __ldg(&stage_U_1.energy[i]);
         flux_iHs[1] = PF::f_local(U_stage);
     }
     
     Number F_iH_array[dim + 2] = {0};
     
     LimiterType limiter;
-    limiter.reset(U_i_array, pressure_i_local, precomputed[i * 2]);
+    limiter.reset(U_i_array, pressure_i_local, __ldg(&precomputed[i * 2]));
     
-    // Process neighbors with
     for (int idx = row_start; idx < row_end; ++idx) {
-        const int j = sparsity.col_indices[idx];
+        const int j = __ldg(&sparsity.col_indices[idx]);
         
-        // Load neighbor data
         Number U_j_array[dim + 2];
-        U_j_array[0] = U.rho[j];
-        U_j_array[1] = U.momentum_x[j];
-        if constexpr (dim >= 2) U_j_array[2] = U.momentum_y[j];
-        if constexpr (dim == 3) U_j_array[3] = U.momentum_z[j];
-        U_j_array[dim + 1] = U.energy[j];
+        U_j_array[0] = __ldg(&U.rho[j]);
+        U_j_array[1] = __ldg(&U.momentum_x[j]);
+        if constexpr (dim >= 2) U_j_array[2] = __ldg(&U.momentum_y[j]);
+        if constexpr (dim == 3) U_j_array[3] = __ldg(&U.momentum_z[j]);
+        U_j_array[dim + 1] = __ldg(&U.energy[j]);
         
-        const Number alpha_j_local = alpha_i[j];
-        const Number d_ij_local = dij_matrix[idx];
+        const Number alpha_j_local = __ldg(&alpha_i[j]);
+        const Number d_ij_local = __ldg(&dij_matrix[idx]);
         const Number factor = (alpha_i_local + alpha_j_local) * Number(0.5);
         const Number d_ijH = d_ij_local * factor;
         
         Number c_ij_local[dim];
         #pragma unroll
         for (int d = 0; d < dim; ++d) {
-            c_ij_local[d] = cij_matrix.values[idx * dim + d];
+            c_ij_local[d] = __ldg(&cij_matrix.values[idx * dim + d]);
         }
         
         constexpr Number eps = Number(1e-14);
@@ -398,7 +394,7 @@ __global__ void low_order_update_kernel(
         }
         
         const auto flux_j = PF::f_local(U_j_array);
-        const Number m_ij = mij_matrix.values[idx];
+        const Number m_ij = __ldg(&mij_matrix.values[idx]);
         
         Number flux_ij[dim + 2];
         #pragma unroll
@@ -418,7 +414,6 @@ __global__ void low_order_update_kernel(
             F_iH_array[k] += weight_main * flux_ij[k];
         }
         
-        // Store P_ij
         Number P_ij_tmp[dim + 2];
         #pragma unroll
         for (int k = 0; k < dim + 2; ++k) {
@@ -426,15 +421,14 @@ __global__ void low_order_update_kernel(
             P_ij_tmp[k] += (d_ijH - d_ij_local) * (U_j_array[k] - U_i_array[k]);
             P_ij_tmp[k] += weight_main * flux_ij[k];
         }
-        
-        // Handle stage contributions
+
         if (stage >= 1 && stage_U_0.rho != nullptr) {
             Number U_j_stage[dim + 2];
-            U_j_stage[0] = stage_U_0.rho[j];
-            U_j_stage[1] = stage_U_0.momentum_x[j];
-            if constexpr (dim >= 2) U_j_stage[2] = stage_U_0.momentum_y[j];
-            if constexpr (dim == 3) U_j_stage[3] = stage_U_0.momentum_z[j];
-            U_j_stage[dim + 1] = stage_U_0.energy[j];
+            U_j_stage[0] = __ldg(&stage_U_0.rho[j]);
+            U_j_stage[1] = __ldg(&stage_U_0.momentum_x[j]);
+            if constexpr (dim >= 2) U_j_stage[2] = __ldg(&stage_U_0.momentum_y[j]);
+            if constexpr (dim == 3) U_j_stage[3] = __ldg(&stage_U_0.momentum_z[j]);
+            U_j_stage[dim + 1] = __ldg(&stage_U_0.energy[j]);
             
             const auto flux_jHs0 = PF::f_local(U_j_stage);
             Number flux_ij_stage[dim + 2];
@@ -452,11 +446,11 @@ __global__ void low_order_update_kernel(
         
         if (stage >= 2 && stage_U_1.rho != nullptr) {
             Number U_j_stage[dim + 2];
-            U_j_stage[0] = stage_U_1.rho[j];
-            U_j_stage[1] = stage_U_1.momentum_x[j];
-            if constexpr (dim >= 2) U_j_stage[2] = stage_U_1.momentum_y[j];
-            if constexpr (dim == 3) U_j_stage[3] = stage_U_1.momentum_z[j];
-            U_j_stage[dim + 1] = stage_U_1.energy[j];
+            U_j_stage[0] = __ldg(&stage_U_1.rho[j]);
+            U_j_stage[1] = __ldg(&stage_U_1.momentum_x[j]);
+            if constexpr (dim >= 2) U_j_stage[2] = __ldg(&stage_U_1.momentum_y[j]);
+            if constexpr (dim == 3) U_j_stage[3] = __ldg(&stage_U_1.momentum_z[j]);
+            U_j_stage[dim + 1] = __ldg(&stage_U_1.energy[j]);
             
             const auto flux_jHs1 = PF::f_local(U_j_stage);
             Number flux_ij_stage[dim + 2];
@@ -472,17 +466,15 @@ __global__ void low_order_update_kernel(
             }
         }
         
-        // Write P_ij to SoA structure
         pij_matrix.p_rho[idx] = P_ij_tmp[0];
         pij_matrix.p_momentum_x[idx] = P_ij_tmp[1];
         if constexpr (dim >= 2) pij_matrix.p_momentum_y[idx] = P_ij_tmp[2];
         if constexpr (dim == 3) pij_matrix.p_momentum_z[idx] = P_ij_tmp[3];
         pij_matrix.p_energy[idx] = P_ij_tmp[dim + 1];
         
-        limiter.accumulate(U_j_array, scaled_c_ij, pressure[j]);
+        limiter.accumulate(U_j_array, scaled_c_ij, __ldg(&pressure[j]));
     }
     
-    // Write results
     new_U.rho[i] = U_i_new_array[0];
     new_U.momentum_x[i] = U_i_new_array[1];
     if constexpr (dim >= 2) new_U.momentum_y[i] = U_i_new_array[2];
@@ -495,11 +487,9 @@ __global__ void low_order_update_kernel(
     if constexpr (dim == 3) ri.r_momentum_z[i] = F_iH_array[3];
     ri.r_energy[i] = F_iH_array[dim + 1];
     
-    // Store bounds
     const Number measure_of_omega_inverse = Number(1) / measure_of_omega;
     const Number hd_i = m_i_local * measure_of_omega_inverse;
-    auto relaxed_bounds = limiter.get_bounds(hd_i);
-    
+    typename LimiterType::Bounds relaxed_bounds = limiter.get_bounds(hd_i);
     bounds[i * 3 + 0] = relaxed_bounds.rho_min;
     bounds[i * 3 + 1] = relaxed_bounds.rho_max;
     bounds[i * 3 + 2] = relaxed_bounds.s_min;
@@ -640,18 +630,11 @@ __global__ void high_order_update_iter1_kernel(
     // First pass: apply limiters
     for (int col_idx = 1; col_idx < row_length; ++col_idx) {
         const int idx = row_start + col_idx;
-        const unsigned int j = sparsity.col_indices[idx];
-        
-        Number l_ij_ = lij_matrix[idx];
-        
-        // Find l_ji for symmetry
-        const int row_start_j = sparsity.row_offsets[j];
-        const int row_end_j = sparsity.row_offsets[j + 1];
-        for (int idx_j = row_start_j + 1; idx_j < row_end_j; ++idx_j) {
-            if (sparsity.col_indices[idx_j] == i) {
-                l_ij_ = fmin(l_ij_, lij_matrix[idx_j]);
-                break;
-            }
+    
+        Number l_ij_ = lij_matrix[idx];    
+        const int idx_ji = sparsity.transpose_indices[idx];
+        if (idx_ji >= 0) {
+            l_ij_ = fmin(l_ij_, lij_matrix[idx_ji]);
         }
         
         // Load P_ij and apply contribution
@@ -743,18 +726,11 @@ __global__ void high_order_update_iter2_kernel(
     // Apply final limiting
     for (int col_idx = 1; col_idx < row_length; ++col_idx) {
         const int idx = row_start + col_idx;
-        const unsigned int j = sparsity.col_indices[idx];
         
         Number l_ij_ = lij_matrix[idx];
-        
-        // Find l_ji for symmetry
-        const int row_start_j = sparsity.row_offsets[j];
-        const int row_end_j = sparsity.row_offsets[j + 1];
-        for (int idx_j = row_start_j + 1; idx_j < row_end_j; ++idx_j) {
-            if (sparsity.col_indices[idx_j] == i) {
-                l_ij_ = fmin(l_ij_, lij_matrix[idx_j]);
-                break;
-            }
+        const int idx_ji = sparsity.transpose_indices[idx];
+        if (idx_ji >= 0) {
+            l_ij_ = fmin(l_ij_, lij_matrix[idx_ji]);
         }
         
         // Load P_ij and apply contribution

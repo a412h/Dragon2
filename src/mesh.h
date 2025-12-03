@@ -26,7 +26,7 @@ public:
         DIRICHLET_MOMENTUM = 6
     };
     
-    static void create_cylinder_mesh(Triangulation<2>& triangulation, const Configuration& config)
+/*    static void create_cylinder_mesh(Triangulation<2>& triangulation, const Configuration& config)
     {
         const double cylinder_diameter = config.object_diameter;
         const double cylinder_position = config.object_position;
@@ -203,7 +203,7 @@ public:
                 face->set_boundary_id(SLIP);
             }
         }
-    }
+    }*/
 
     static void create_sphere_in_channel_mesh(Triangulation<3>& triangulation, const Configuration& config)
     {
@@ -212,15 +212,16 @@ public:
         const unsigned int height_below_sphere = config.height_below_sphere;
         const unsigned int height_above_sphere = config.height_above_sphere;
         const unsigned int depth = config.depth;
+        const double shell_region_radius = config.shell_region_radius;
+        const unsigned int n_shells = config.n_shells;
         const int mesh_refinement = config.mesh_refinement;
-
-        const std::vector<unsigned int> lengths_and_heights = {length_before_sphere, length_after_sphere, height_below_sphere, height_above_sphere};
-
+        const std::vector<unsigned int> lengths_heights_widths = {length_before_sphere, length_after_sphere, height_below_sphere, height_above_sphere, depth, depth};
+      
         dealii::GridGenerator::uniform_channel_with_sphere(
             triangulation,
-            lengths_and_heights,
-            depth,
-            true);  // Colorize (for boundary IDs)
+            lengths_heights_widths,
+            false,
+            true);  // Colorize (needed for boundary IDs)
 
         if (mesh_refinement > 0)
             triangulation.refine_global(mesh_refinement);
@@ -241,7 +242,7 @@ public:
             else if (bid >= 3 && bid <= 6)  // Channel walls
                 face->set_boundary_id(DO_NOTHING);
         }    
-    }    
+    }   
 
     static void create_airfoil_mesh(Triangulation<2>& triangulation) //, const Configuration& config)
     {

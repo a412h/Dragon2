@@ -1,0 +1,51 @@
+# Navier-Stokes Mach 3 flow around sphere
+
+subsection A - TimeLoop
+    set basename            = ns-mach3-sphere-3d
+    #set enable output full  = true
+    set final time          = 5.0
+    set timer granularity   = 0.1
+end
+
+subsection B - Equation
+    set dimension       = 3
+    set equation        = navier_stokes
+    set gamma           = 1.4
+    set mu = 1.0e-3
+end
+
+subsection C - Discretization
+    set geometry        = sphere_channel
+    set mesh refinement = 4
+    
+    subsection sphere_channel  # In unit of cube length (2)
+        set length before sphere = 1
+        set length after sphere =  3
+        set height below sphere =  1
+        set height above sphere =  1
+        set depth =                1
+    end
+end
+
+subsection E - InitialValues
+    #set configuration = uniform
+    set direction     = 1, 0, 0
+    #set position      = 1, 0, 0
+    #set perturbation  = 0
+    
+    subsection uniform
+        set primitive state = 1.4, 3.0, 1
+    end
+end
+
+subsection H - TimeIntegrator
+    set cfl min               = 0.90
+    set cfl max               = 0.90
+    #set cfl recovery strategy = none
+    #set time stepping scheme  = strang erk 33 cn
+end
+
+#subsection J - VTUOutput
+    #set use mpi io     = true
+    #set schlieren beta = 10
+#end
