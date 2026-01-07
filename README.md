@@ -58,3 +58,8 @@ make
 #### Flow transonic with wing Onera OAT15a (contour of density, 2 millions of points):
 
 ![Flow 2D](ns_oat15a.png)
+
+
+#### Atmospheric-entry of Nasa capsule 120-CA (contour of density, half-million of points, Mach8, computed in 7 minutes on my laptop):
+
+![Flow 2D](nasa_120_ca_reentry.png)
