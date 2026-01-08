@@ -7,9 +7,8 @@
 #include <deal.II/fe/fe_values.h>
 #include <deal.II/base/quadrature_lib.h>
 
-// ============================================================================
-// Constant memory for quadrature data (optimization)
-// ============================================================================
+
+// Quadrature data (optimization)
 namespace QuadratureData {
     // 2D quadrature points (Gauss)
     __constant__ float c_quad_pts_2d[4][2] = {
@@ -33,9 +32,8 @@ namespace QuadratureData {
     __constant__ float c_gp = 0.57735026918962576451f;
 }
 
-// ============================================================================
+
 // Kernels
-// ============================================================================
 template<int dim, typename Number, int nodes_per_elem = (dim == 2) ? 4 : 8>
 __global__ void compute_viscous_heating_kernel(
     const Number* velocity,              // Input: nodal velocities [n_nodes * dim]
@@ -51,7 +49,7 @@ __global__ void compute_viscous_heating_kernel(
     const int elem_id = blockIdx.x * blockDim.x + threadIdx.x;
     if (elem_id >= n_elements) return;
     
-    // Shared memory for velocity data (optimization)
+    // Velocity data
     __shared__ Number s_vel_elem[128][nodes_per_elem][dim];
     const int tid = threadIdx.x;
     
@@ -62,7 +60,7 @@ __global__ void compute_viscous_heating_kernel(
         nodes[n] = element_connectivity[elem_id * nodes_per_elem + n];
     }
     
-    // Load velocity data (optimization)
+    // Load velocity data
     #pragma unroll nodes_per_elem
     for (int n = 0; n < nodes_per_elem; ++n) {
         for (int d = 0; d < dim; ++d) {
@@ -70,7 +68,7 @@ __global__ void compute_viscous_heating_kernel(
         }
     }
     
-    // Load element velocities (optimization)
+    // Load element velocities
     #pragma unroll nodes_per_elem
     for (int n = 0; n < nodes_per_elem; ++n) {
         #pragma unroll
@@ -84,28 +82,10 @@ __global__ void compute_viscous_heating_kernel(
     Number (&vel_elem)[nodes_per_elem][dim] = 
         reinterpret_cast<Number(&)[nodes_per_elem][dim]>(s_vel_elem[tid]);
     
-    // Load Jacobian and inverse
-    const int jac_offset = elem_id * dim * dim * 2;
-    Number J[dim][dim], J_inv[dim][dim], det_J;
+    // Compute Jacobian data size for quadrature
+    constexpr int n_q_points = (dim == 2) ? 4 : 8;
+    constexpr int jac_data_per_quad = (dim == 2) ? 8 : 18;
     
-    #pragma unroll
-    for (int i = 0; i < dim; ++i) {
-        #pragma unroll
-        for (int j = 0; j < dim; ++j) {
-            J[i][j] = jacobian_data[jac_offset + i * dim + j];
-            J_inv[i][j] = jacobian_data[jac_offset + dim * dim + i * dim + j];
-        }
-    }
-    
-    if constexpr (dim == 2) {
-        det_J = J[0][0] * J[1][1] - J[0][1] * J[1][0];
-    } else {
-        det_J = J[0][0] * (J[1][1] * J[2][2] - J[1][2] * J[2][1]) -
-                J[0][1] * (J[1][0] * J[2][2] - J[1][2] * J[2][0]) +
-                J[0][2] * (J[1][0] * J[2][1] - J[1][1] * J[2][0]);
-    }
-    
-    // Initialize node contributions with explicit unroll
     Number node_contributions[nodes_per_elem];
     #pragma unroll nodes_per_elem
     for (int n = 0; n < nodes_per_elem; ++n) {
@@ -114,13 +94,27 @@ __global__ void compute_viscous_heating_kernel(
     
     // Loop over quadrature points
     if constexpr (dim == 2) {
-        // OPTIMIZATION 2: Use constant memory for quadrature points
         const Number gp = Number(QuadratureData::c_gp);
         
         #pragma unroll 4
         for (int q = 0; q < 4; ++q) {
             const Number xi = Number(QuadratureData::c_quad_pts_2d[q][0]);
             const Number eta = Number(QuadratureData::c_quad_pts_2d[q][1]);
+
+            // Load Jacobian for this quadrature point
+            const int jac_offset = elem_id * n_q_points * jac_data_per_quad + q * jac_data_per_quad;
+            Number J_inv[2][2];
+            J_inv[0][0] = jacobian_data[jac_offset + 4];
+            J_inv[0][1] = jacobian_data[jac_offset + 5];
+            J_inv[1][0] = jacobian_data[jac_offset + 6];
+            J_inv[1][1] = jacobian_data[jac_offset + 7];
+
+            // Compute det(J) for this quadrature point
+            const Number J00 = jacobian_data[jac_offset + 0];
+            const Number J01 = jacobian_data[jac_offset + 1];
+            const Number J10 = jacobian_data[jac_offset + 2];
+            const Number J11 = jacobian_data[jac_offset + 3];
+            const Number det_J = J00 * J11 - J01 * J10;
             
             // Shape functions at quadrature point
             Number phi[4];
@@ -202,10 +196,34 @@ __global__ void compute_viscous_heating_kernel(
         
         #pragma unroll 8
         for (int q = 0; q < 8; ++q) {
-            // Optimization
             const Number xi = Number(QuadratureData::c_quad_pts_3d[q][0]);
             const Number eta = Number(QuadratureData::c_quad_pts_3d[q][1]); 
             const Number zeta = Number(QuadratureData::c_quad_pts_3d[q][2]);
+
+            // Load Jacobian for this quadrature point
+            const int jac_offset = elem_id * n_q_points * jac_data_per_quad + q * jac_data_per_quad;
+            Number J_inv[3][3];
+            #pragma unroll 3
+            for (int i = 0; i < 3; ++i) {
+                #pragma unroll 3
+                for (int j = 0; j < 3; ++j) {
+                    J_inv[i][j] = jacobian_data[jac_offset + 9 + i * 3 + j];
+                }
+            }
+
+            // Compute det_J for this quadrature point
+            const Number J00 = jacobian_data[jac_offset + 0];
+            const Number J01 = jacobian_data[jac_offset + 1];
+            const Number J02 = jacobian_data[jac_offset + 2];
+            const Number J10 = jacobian_data[jac_offset + 3];
+            const Number J11 = jacobian_data[jac_offset + 4];
+            const Number J12 = jacobian_data[jac_offset + 5];
+            const Number J20 = jacobian_data[jac_offset + 6];
+            const Number J21 = jacobian_data[jac_offset + 7];
+            const Number J22 = jacobian_data[jac_offset + 8];
+            const Number det_J = J00 * (J11 * J22 - J12 * J21) -
+                                 J01 * (J10 * J22 - J12 * J20) +
+                                 J02 * (J10 * J21 - J11 * J20);            
             
             // Shape functions for Q1 hexahedron at quadrature point
             Number phi[8];
@@ -361,15 +379,17 @@ public:
         std::cout << "    Elements: " << n_elements << std::endl;
         
         constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
-        constexpr int jac_data_per_elem = (dim == 2) ? 8 : 18;
+        constexpr int n_q_points = (dim == 2) ? 4 : 8;
+        constexpr int jac_data_per_quad = (dim == 2) ? 8 : 18;
+        constexpr int jac_data_per_elem = n_q_points * jac_data_per_quad;
         
         std::vector<int> h_connectivity(n_elements * nodes_per_elem);
         std::vector<Number> h_jacobians(n_elements * jac_data_per_elem);
         
         // Setup for extracting Jacobian
-        dealii::QGauss<dim> quadrature(1);
+        dealii::QGauss<dim> quadrature(2);
         dealii::FEValues<dim> fe_values(
-            offline_data.finite_element, 
+            offline_data.finite_element,
             quadrature,
             dealii::update_jacobians | dealii::update_inverse_jacobians);
         
@@ -392,26 +412,30 @@ public:
             for (unsigned int i = 0; i < nodes_per_elem; ++i) {
                 h_connectivity[elem_id * nodes_per_elem + i] = local_dof_indices[i];
             }
-            // Jacobians
+            // Compute Jacobians
             fe_values.reinit(cell);
-            const auto& J = fe_values.jacobian(0);
-            const auto& J_inv = fe_values.inverse_jacobian(0);
-            
-            if constexpr (dim == 2) {
-                h_jacobians[elem_id * 8 + 0] = static_cast<Number>(J[0][0]);
-                h_jacobians[elem_id * 8 + 1] = static_cast<Number>(J[0][1]);
-                h_jacobians[elem_id * 8 + 2] = static_cast<Number>(J[1][0]);
-                h_jacobians[elem_id * 8 + 3] = static_cast<Number>(J[1][1]);
-                
-                h_jacobians[elem_id * 8 + 4] = static_cast<Number>(J_inv[0][0]);
-                h_jacobians[elem_id * 8 + 5] = static_cast<Number>(J_inv[0][1]);
-                h_jacobians[elem_id * 8 + 6] = static_cast<Number>(J_inv[1][0]);
-                h_jacobians[elem_id * 8 + 7] = static_cast<Number>(J_inv[1][1]);
-            } else {
-                for (int i = 0; i < 3; ++i) {
-                    for (int j = 0; j < 3; ++j) {
-                        h_jacobians[elem_id * 18 + i * 3 + j] = static_cast<Number>(J[i][j]);
-                        h_jacobians[elem_id * 18 + 9 + i * 3 + j] = static_cast<Number>(J_inv[i][j]);
+            for (unsigned int q = 0; q < quadrature.size(); ++q) {
+                const auto& J = fe_values.jacobian(q);
+                const auto& J_inv = fe_values.inverse_jacobian(q);
+
+                if constexpr (dim == 2) {
+                    const int offset = elem_id * jac_data_per_elem + q * jac_data_per_quad;
+                    h_jacobians[offset + 0] = static_cast<Number>(J[0][0]);
+                    h_jacobians[offset + 1] = static_cast<Number>(J[0][1]);
+                    h_jacobians[offset + 2] = static_cast<Number>(J[1][0]);
+                    h_jacobians[offset + 3] = static_cast<Number>(J[1][1]);
+
+                    h_jacobians[offset + 4] = static_cast<Number>(J_inv[0][0]);
+                    h_jacobians[offset + 5] = static_cast<Number>(J_inv[0][1]);
+                    h_jacobians[offset + 6] = static_cast<Number>(J_inv[1][0]);
+                    h_jacobians[offset + 7] = static_cast<Number>(J_inv[1][1]);
+                } else {
+                    const int offset = elem_id * jac_data_per_elem + q * jac_data_per_quad;
+                    for (int i = 0; i < 3; ++i) {
+                        for (int j = 0; j < 3; ++j) {
+                            h_jacobians[offset + i * 3 + j] = static_cast<Number>(J[i][j]);
+                            h_jacobians[offset + 9 + i * 3 + j] = static_cast<Number>(J_inv[i][j]);
+                        }
                     }
                 }
             }

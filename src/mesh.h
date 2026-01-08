@@ -207,20 +207,20 @@ public:
 
     static void create_sphere_in_channel_mesh(Triangulation<3>& triangulation, const Configuration& config)
     {
-        const unsigned int length_before_sphere = config.length_before_sphere;
-        const unsigned int length_after_sphere = config.length_after_sphere;
-        const unsigned int height_below_sphere = config.height_below_sphere;
-        const unsigned int height_above_sphere = config.height_above_sphere;
-        const unsigned int depth = config.depth;
-        const double shell_region_radius = config.shell_region_radius;
-        const unsigned int n_shells = config.n_shells;
+        const double length_before_sphere = config.length_before_sphere;
+        const double length_after_sphere = config.length_after_sphere;
+        const double height_below_sphere = config.height_below_sphere;
+        const double height_above_sphere = config.height_above_sphere;
+        const double depth = config.depth;
         const int mesh_refinement = config.mesh_refinement;
-        const std::vector<unsigned int> lengths_heights_widths = {length_before_sphere, length_after_sphere, height_below_sphere, height_above_sphere, depth, depth};
+        const std::vector<double> lengths_heights_widths = {length_before_sphere, length_after_sphere, height_below_sphere, height_above_sphere, depth, depth};
       
         dealii::GridGenerator::uniform_channel_with_sphere(
             triangulation,
             lengths_heights_widths,
-            false,
+            0.5,
+            0.75,
+            true,
             true);  // Colorize (needed for boundary IDs)
 
         if (mesh_refinement > 0)
@@ -242,7 +242,7 @@ public:
             else if (bid >= 3 && bid <= 6)  // Channel walls
                 face->set_boundary_id(DO_NOTHING);
         }    
-    }   
+    }  
 
     static void create_airfoil_mesh(Triangulation<2>& triangulation) //, const Configuration& config)
     {
