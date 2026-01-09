@@ -60,7 +60,7 @@ make
 ![Flow 2D](ns_oat15a.png)
 
 
-#### Atmospheric-entry of Nasa capsule 120-CA:
+#### Atmospheric-entry of Nasa Capsule 120-CA:
 
 ##### mesh with dealii
 
