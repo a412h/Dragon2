@@ -60,12 +60,12 @@ make
 ![Flow 2D](ns_oat15a.png)
 
 
-#### Atmospheric-entry of Nasa Capsule 120-CA:
+#### Atmospheric-entry of Nasa Capsule 120-CA
 
-##### mesh with dealii
+##### mesh with dealii:
 
 ![Flow 2D](nasa_120_ca_mesh.png)
 
-##### solution as contour of density, half-million of points, Mach8, computed in 7 minutes on my laptop
+##### solution as contour of density, half-million of points, Mach8, computed in 7 minutes on my laptop:
 
 ![Flow 2D](nasa_120_ca_reentry.png)
