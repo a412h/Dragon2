@@ -66,10 +66,6 @@ make
 
 ![Flow 2D](nasa_120_ca_mesh.png)
 
-##### solution as contour of density, half-million of points, Mach8, computed in 7 minutes on my laptop:
-
-![Flow 2D](nasa_120_ca_reentry.png)
-
-##### solution as contour of density, with a refined mesh of 4 millions and a half points, seen from a different angle, Mach8:
+##### solution as contour of density, 4.5 millions of points, Mach8:
 
 ![Flow 2D](nasa_120_ca_reentry_4M_mesh.png)
