@@ -66,6 +66,10 @@ make
 
 ![Flow 2D](nasa_120_ca_mesh.png)
 
-##### solution as contour of density, 4.5 millions of points, Mach8:
+##### solution as contour of density, 4.5 millions of points, Mach 8:
 
 ![Flow 2D](nasa_120_ca_reentry_4M_mesh.png)
+
+##### solution as contour of density with isolines, 0.4 millions of points, Mach 0.8:
+
+![Flow 2D](nasa_120_ca_reentry_mach_0.8.png)
