@@ -73,3 +73,7 @@ make
 ##### solution as contour of density with isolines, 0.4 millions of points, Mach 0.8:
 
 ![Flow 2D](nasa_120_ca_reentry_mach_0.8.png)
+
+##### solution as density, 0.4 millions of points, Mach 3:
+
+![Flow 2D](nasa_120_ca_reentry_mach_3.png)
