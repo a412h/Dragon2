@@ -55,7 +55,7 @@ make
 ![Sphere 3D](ns_sphere_channel_mach3.png)
 
 
-#### Flow transonic with wing Onera OAT15a (contour of density, 2 millions of points):
+#### Flow transonic with wing Onera OAT15a (contour of density, 0.5 million of points):
 
 ![Flow 2D](ns_oat15a.png)
 
