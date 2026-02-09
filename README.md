@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="drg2_nobg_png" alt="Dragon II"/>
+  <img src="drg2_nobg_png"/>
 </div>
 
 # Dragon2 Solver
