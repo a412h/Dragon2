@@ -1,7 +1,5 @@
 <div align="center">
-<pre>
-ryu_pixelated_nobg.png
-</pre>
+  <img src="./ryu_pixelated_nobg.png" alt="Dragon II"/>
 </div>
 
 # Dragon2 Solver
