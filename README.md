@@ -43,6 +43,7 @@ On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 
 ## Example Cases
 
+|--------|-------------|-----|
 | cylinder-2d.cfg | Cylinder flow | 2D |
 | cylinder-3d.cfg | Cylinder flow | 3D |
 | sphere-channel-3d.cfg | Sphere in channel | 3D |
