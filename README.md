@@ -1,3 +1,9 @@
+<div align="center">
+<pre>
+ryu_pixelated_nobg.png
+</pre>
+</div>
+
 # Dragon2 Solver
 
 Transient Direct Navier-Stokes solver, written in CUDA / C++
