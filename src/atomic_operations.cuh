@@ -10,13 +10,11 @@ __device__ __forceinline__ float atomicMinFloat(float* addr, float value) {
     return old;
 }
 
-// Atomic min wrapper for both float and double
 __device__ __forceinline__ void atomicMinNumber(float* addr, float value) {
     atomicMinFloat(addr, value);
 }
 
 __device__ __forceinline__ void atomicMinNumber(double* addr, double value) {
-    // Not implemented yet for double
 }
 
 __device__ __forceinline__ void atomicMin_custom(float* address, float val) {
@@ -39,4 +37,4 @@ __device__ __forceinline__ void atomicMin_custom(double* address, double val) {
     } while (assumed != old);
 }
 
-#endif // ATOMIC_OPERATIONS_CUH
+#endif

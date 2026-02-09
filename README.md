@@ -1,47 +1,59 @@
-<div align="center">
-<pre>
-██████╗ ██████╗  █████╗  ██████╗  ██████╗ ███╗   ██╗    ██╗██╗
-██╔══██╗██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗████╗  ██║    ██║██║
-██║  ██║██████╔╝███████║██║  ███╗██║   ██║██╔██╗ ██║    ██║██║
-██║  ██║██╔══██╗██╔══██║██║   ██║██║   ██║██║╚██╗██║    ██║██║
-██████╔╝██║  ██║██║  ██║╚██████╔╝╚██████╔╝██║ ╚████║    ██║██║
-╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝    ╚═╝╚═╝
-</pre>
-</div>
+# Dragon2 Solver
 
-# DRAGON II - Experimental CUDA Navier-Stokes Solver - in development
+Transient Direct Navier-Stokes solver, written in CUDA / C++
 
-## Description
-This project is a CUDA port of the solver ryujin (https://github.com/conservation-laws/ryujin).
-It is not a fork as most of the original code has been entirely rewritten for CUDA, and it is not an official contribution.
+## Features
 
-## Key Concepts
-The approach followed here is to transfer the entire computation on the GPU to offer maximal speed.
+- Fast implementation
+- 2D and 3D simulations
+- Simple use: just load Gmsh mesh (.msh format), set boundary conditions, run
 
-## Remarks
-- Version II (Navier-Stokes)
-- Single GPU computation
-- Except for the generation of output files, libraries OpenMP, MPI and SIMD have been removed, as all computations are done on the GPU
+## Requirements
 
-## Supported OS
-Tested on Ubuntu 24.04
+- NVIDIA GPU (RTX 3000/4000/5000 series or compatible)
+- CUDA Toolkit 12.0+
+- deal.II 9.3+ (finite element library)
+- CMake 3.18+
+- Linux (Ubuntu 22.04+ recommended)
+- OpenMP
 
-## Prerequisites
-Tested with Nvidia RTX 4000 and RTX 5000 generation cards
+## Building
 
-## Build and run
-
-### Build with:
 ```bash
-cd build/
-cmake ..
-make
+mkdir build && cd build
+cmake -DDEAL_II_DIR=/path/to/dealii/install ..
+make -j$(nproc)
 ```
 
-### Then run with:
+Set DEAL_II_DIR to the path of deal.II installation
+
+The build step detects GPU architecture (on CMake 3.24+.)
+On older CMake versions it compiles for sm_86, sm_89, and sm_100.
+
+## Quick Start
+
 ```bash
-./solver_ns
+./solver_ns examples/cylinder-2d.cfg
+./solver_ns --help
 ```
+
+## Example Cases
+
+| cylinder-2d.cfg | Cylinder flow | 2D |
+| cylinder-3d.cfg | Cylinder flow | 3D |
+| sphere-channel-3d.cfg | Sphere in channel | 3D |
+| capsule-2d.cfg | Nasa capsule 120-CA Reentry | 2D |
+| capsule-3d.cfg | Nasa capsule 120-CA Reentry | 3D |
+| oat15a-2d.cfg | Onera OAT15a Transonic airfoil | 2D |
+
+## Documentation
+
+- [User Manual](docs/USER_MANUAL.md)
+- [Test Cases](docs/TEST_CASES.md)
+
+## License
+
+Licensed under the Apache License 2.0. See LICENSE for details.
 
 ### - These are extracts of transcient Navier-Stokes simulations -
 
@@ -77,3 +89,4 @@ make
 ##### solution as density, 0.4 millions of points, Mach 3:
 
 ![Flow 2D](nasa_120_ca_reentry_mach_3.png)
+

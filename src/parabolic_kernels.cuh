@@ -1,4 +1,3 @@
-// parabolic_kernels.cuh - Kernel definitions for parabolic step computations
 #ifndef PARABOLIC_KERNELS_CUH
 #define PARABOLIC_KERNELS_CUH
 
@@ -8,19 +7,16 @@
 #include "atomic_operations.cuh"
 
 
-// ============================================================================
-// Step 1: Velocity Kernels
-// ============================================================================
 
 template<int dim, typename Number>
-__global__ void build_velocity_rhs_kernel(
+__global__ void __launch_bounds__(256, 4) build_velocity_rhs_kernel(
     const State<dim, Number> old_U,
     const State<dim, Number> init_U,
-    const Number* lumped_mass_matrix,
-    Number* density,
-    Number* velocity,
-    Number* velocity_rhs,
-    Number* internal_energy,
+    const Number* __restrict__ lumped_mass_matrix,
+    Number* __restrict__ density,
+    Number* __restrict__ velocity,
+    Number* __restrict__ velocity_rhs,
+    Number* __restrict__ internal_energy,
     const BoundaryData<dim, Number> boundary_data,
     int n_dofs)
 {
@@ -28,80 +24,99 @@ __global__ void build_velocity_rhs_kernel(
 
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-    
-    const Number rho_i = PF::density(old_U, i);
-    const auto M_i = PF::momentum(old_U, i);
-    const Number rho_e_i = PF::internal_energy(old_U, i);
-    const Number m_i = lumped_mass_matrix[i];
+
+    const Number rho_i = __ldg(&old_U.rho[i]);
+    Number M_i[dim];
+    M_i[0] = __ldg(&old_U.momentum_x[i]);
+    if constexpr (dim >= 2) M_i[1] = __ldg(&old_U.momentum_y[i]);
+    if constexpr (dim == 3) M_i[2] = __ldg(&old_U.momentum_z[i]);
+    const Number E_i = __ldg(&old_U.energy[i]);
+    const Number rho_i_inv = Number(1) / rho_i;
+
+    Number m_sq = M_i[0] * M_i[0];
+    if constexpr (dim >= 2) m_sq += M_i[1] * M_i[1];
+    if constexpr (dim == 3) m_sq += M_i[2] * M_i[2];
+    const Number rho_e_i = E_i - Number(0.5) * m_sq * rho_i_inv;
+
+    const Number m_i = __ldg(&lumped_mass_matrix[i]);
 
     density[i] = rho_i;
-    
-    // velocity = momentum / density
-    velocity[i * dim + 0] = M_i[0] / rho_i;
-    // velocity_rhs = m_i * momentum (mass-weighted momentum)
+
+    velocity[i * dim + 0] = M_i[0] * rho_i_inv;
     velocity_rhs[i * dim + 0] = m_i * M_i[0];
-    
+
     if constexpr (dim >= 2) {
-        velocity[i * dim + 1] = M_i[1] / rho_i;
+        velocity[i * dim + 1] = M_i[1] * rho_i_inv;
         velocity_rhs[i * dim + 1] = m_i * M_i[1];
     }
     if constexpr (dim == 3) {
-        velocity[i * dim + 2] = M_i[2] / rho_i;
+        velocity[i * dim + 2] = M_i[2] * rho_i_inv;
         velocity_rhs[i * dim + 2] = m_i * M_i[2];
     }
 
-    // Internal energy per unit mass
-    internal_energy[i] = rho_e_i / rho_i;
+    internal_energy[i] = rho_e_i * rho_i_inv;
 
-    // Apply boundary conditions
-    for (int b = 0; b < boundary_data.n_boundary_dofs; ++b) {
-        if (boundary_data.boundary_dofs[b] == i) {
-            const auto id = boundary_data.boundary_ids[b];
+    const int id = __ldg(&boundary_data.bc_type[i]);
+    if (id < 0) return;
 
-            if (id == 2) {  // Slip boundary
-                Number V_i[dim];
-                Number RHS_i[dim];
-                for (int d = 0; d < dim; ++d) {
-                    V_i[d] = velocity[i * dim + d];
-                    RHS_i[d] = velocity_rhs[i * dim + d];
-                }
+    const int b = __ldg(&boundary_data.bc_index[i]);
 
-                // Remove normal component
-                Number V_i_dot_n = Number(0);
-                Number RHS_i_dot_n = Number(0);  
-                for (int d = 0; d < dim; ++d) {
-                    V_i_dot_n += V_i[d] * boundary_data.boundary_normals[b * dim + d];
-                    RHS_i_dot_n += RHS_i[d] * boundary_data.boundary_normals[b * dim + d];
-                }
-                for (int d = 0; d < dim; ++d){
-                    V_i[d] -= V_i_dot_n * boundary_data.boundary_normals[b * dim + d];
-                    RHS_i[d] -= RHS_i_dot_n * boundary_data.boundary_normals[b * dim + d];
-                }
-                for (int d = 0; d < dim; ++d) {
-                    velocity[i * dim + d] = V_i[d];
-                    velocity_rhs[i * dim + d] = RHS_i[d];
-                }
-            }
-            else if (id == 1) {  // No-slip boundary
-                for (int d = 0; d < dim; ++d) {
-                    velocity[i * dim + d] = Number(0);
-                    velocity_rhs[i * dim + d] = Number(0);
-                }            
-            }
-            else if (id == 4) {  // Dirichlet inflow
-                const Number rho_init_i = PF::density(init_U, i);
-                const Number rho_init_inv = Number(1) / rho_init_i;
-                const auto M_init_i = PF::momentum(init_U, i);
-                const Number e_init = PF::internal_energy(init_U, i) * rho_init_inv;
-                
-                for (int d = 0; d < dim; ++d) {
-                    velocity[i * dim + d] = M_init_i[d] * rho_init_inv;
-                    velocity_rhs[i * dim + d] = m_i * M_init_i[d];
-                }
-                internal_energy[i] = e_init;
-            }
-            break;
+    if (id == 2) {
+        Number V_i[dim];
+        Number RHS_i[dim];
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            V_i[d] = velocity[i * dim + d];
+            RHS_i[d] = velocity_rhs[i * dim + d];
         }
+
+        Number V_i_dot_n = Number(0);
+        Number RHS_i_dot_n = Number(0);
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            const Number n_d = __ldg(&boundary_data.boundary_normals[b * dim + d]);
+            V_i_dot_n += V_i[d] * n_d;
+            RHS_i_dot_n += RHS_i[d] * n_d;
+        }
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            const Number n_d = __ldg(&boundary_data.boundary_normals[b * dim + d]);
+            V_i[d] -= V_i_dot_n * n_d;
+            RHS_i[d] -= RHS_i_dot_n * n_d;
+        }
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            velocity[i * dim + d] = V_i[d];
+            velocity_rhs[i * dim + d] = RHS_i[d];
+        }
+    }
+    else if (id == 1) {
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            velocity[i * dim + d] = Number(0);
+            velocity_rhs[i * dim + d] = Number(0);
+        }
+    }
+    else if (id == 4) {
+        const Number rho_init_i = __ldg(&init_U.rho[i]);
+        const Number rho_init_inv = Number(1) / rho_init_i;
+        Number M_init_i[dim];
+        M_init_i[0] = __ldg(&init_U.momentum_x[i]);
+        if constexpr (dim >= 2) M_init_i[1] = __ldg(&init_U.momentum_y[i]);
+        if constexpr (dim == 3) M_init_i[2] = __ldg(&init_U.momentum_z[i]);
+        const Number E_init_i = __ldg(&init_U.energy[i]);
+
+        Number m_sq_init = M_init_i[0] * M_init_i[0];
+        if constexpr (dim >= 2) m_sq_init += M_init_i[1] * M_init_i[1];
+        if constexpr (dim == 3) m_sq_init += M_init_i[2] * M_init_i[2];
+        const Number e_init = (E_init_i - Number(0.5) * m_sq_init * rho_init_inv) * rho_init_inv;
+
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            velocity[i * dim + d] = M_init_i[d] * rho_init_inv;
+            velocity_rhs[i * dim + d] = m_i * M_init_i[d];
+        }
+        internal_energy[i] = e_init;
     }
 }
 
@@ -114,9 +129,9 @@ __global__ void update_momentum_from_velocity_kernel(
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-    
+
     const Number rho_i = old_U.rho[i];
-    
+
     new_U.momentum_x[i] = rho_i * velocity_solution[i * dim + 0];
     if constexpr (dim >= 2) {
         new_U.momentum_y[i] = rho_i * velocity_solution[i * dim + 1];
@@ -126,20 +141,17 @@ __global__ void update_momentum_from_velocity_kernel(
     }
 }
 
-// ============================================================================
-// Step 2: Internal Energy System Kernels
-// ============================================================================
 
 template<int dim, typename Number>
-__global__ void complete_internal_energy_rhs_kernel(
+__global__ void __launch_bounds__(256, 4) complete_internal_energy_rhs_kernel(
     const State<dim, Number> old_U,
     const State<dim, Number> init_U,
-    const Number* velocity,
-    const Number* velocity_new,
-    const Number* density,
-    const Number* internal_energy,
-    Number* internal_energy_rhs,
-    const Number* lumped_mass_matrix,
+    const Number* __restrict__ velocity,
+    const Number* __restrict__ velocity_new,
+    const Number* __restrict__ density,
+    const Number* __restrict__ internal_energy,
+    Number* __restrict__ internal_energy_rhs,
+    const Number* __restrict__ lumped_mass_matrix,
     const BoundaryData<dim, Number> boundary_data,
     Number tau,
     bool crank_nicolson_extrapolation,
@@ -147,60 +159,60 @@ __global__ void complete_internal_energy_rhs_kernel(
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-    
-    const Number m_i = lumped_mass_matrix[i];
-    const Number rho_i = density[i];
-    const Number e_i = internal_energy[i];
-    const Number i_e_rhs = internal_energy_rhs[i];  // Record before overwriting
-    
+
+    const Number m_i = __ldg(&lumped_mass_matrix[i]);
+    const Number rho_i = __ldg(&density[i]);
+    const Number e_i = __ldg(&internal_energy[i]);
+    const Number i_e_rhs = __ldg(&internal_energy_rhs[i]);
+
     Number V_i[dim];
     Number V_i_new[dim];
+    #pragma unroll
     for (int d = 0; d < dim; ++d) {
-        V_i[d] = velocity[i * dim + d];
-        V_i_new[d] = velocity_new[i * dim + d];
+        V_i[d] = __ldg(&velocity[i * dim + d]);
+        V_i_new[d] = __ldg(&velocity_new[i * dim + d]);
     }
-    
-    // Kinetic energy correction: 0.5 * |V_old - V_new|^2
+
     Number correction;
     if (crank_nicolson_extrapolation) {
         correction = Number(0);
     } else {
         Number norm_square = Number(0);
+        #pragma unroll
         for (int d = 0; d < dim; ++d) {
             Number diff = V_i[d] - V_i_new[d];
             norm_square += diff * diff;
         }
         correction = Number(0.5) * norm_square;
     }
-    
-    internal_energy_rhs[i] = m_i * rho_i * (e_i + correction) + tau * i_e_rhs;
 
-    // Apply boundary conditions
-    for (int b = 0; b < boundary_data.n_boundary_dofs; ++b) {
-        if (boundary_data.boundary_dofs[b] == i) {
-            const auto id = boundary_data.boundary_ids[b];
-            
-            if (id == 4) {  // Dirichlet inflow
-                const Number rho_init = init_U.rho[i];
-                const Number rho_init_inv = Number(1) / rho_init;
-                
-                Number M_init[dim];
-                M_init[0] = init_U.momentum_x[i];
-                if constexpr (dim >= 2) M_init[1] = init_U.momentum_y[i];
-                if constexpr (dim == 3) M_init[2] = init_U.momentum_z[i];
-                
-                Number kinetic = Number(0);
-                for (int d = 0; d < dim; ++d) {
-                    kinetic += M_init[d] * M_init[d];
-                }
-                kinetic *= Number(0.5) * rho_init_inv;
-                
-                const Number e_init = (init_U.energy[i] * rho_init_inv) - kinetic;
-                internal_energy_rhs[i] = m_i * rho_i * e_init;
-            }
-            break;
+    Number result = m_i * rho_i * (e_i + correction) + tau * i_e_rhs;
+
+    const int id = __ldg(&boundary_data.bc_type[i]);
+    if (id == 4) {
+        const int b = __ldg(&boundary_data.bc_index[i]);
+        (void)b;
+
+        const Number rho_init = __ldg(&init_U.rho[i]);
+        const Number rho_init_inv = Number(1) / rho_init;
+
+        Number M_init[dim];
+        M_init[0] = __ldg(&init_U.momentum_x[i]);
+        if constexpr (dim >= 2) M_init[1] = __ldg(&init_U.momentum_y[i]);
+        if constexpr (dim == 3) M_init[2] = __ldg(&init_U.momentum_z[i]);
+
+        Number kinetic = Number(0);
+        #pragma unroll
+        for (int d = 0; d < dim; ++d) {
+            kinetic += M_init[d] * M_init[d];
         }
+        kinetic *= Number(0.5) * rho_init_inv;
+
+        const Number e_init = (__ldg(&init_U.energy[i]) * rho_init_inv) - kinetic;
+        result = m_i * rho_i * e_init;
     }
+
+    internal_energy_rhs[i] = result;
 }
 
 template<int dim, typename Number>
@@ -212,12 +224,11 @@ __global__ void update_total_energy_from_internal_energy_kernel(
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-    
+
     const Number rho_i = old_U.rho[i];
     const Number rho_i_inv = Number(1) / rho_i;
     const Number e_i = internal_energy_solution[i];
-    
-    // Kinetic energy from updated momentum
+
     Number kinetic = Number(0);
     kinetic += new_U.momentum_x[i] * new_U.momentum_x[i];
     if constexpr (dim >= 2) {
@@ -227,14 +238,10 @@ __global__ void update_total_energy_from_internal_energy_kernel(
         kinetic += new_U.momentum_z[i] * new_U.momentum_z[i];
     }
     kinetic *= Number(0.5) * rho_i_inv;
-    
-    // Total energy = rho * e + kinetic
+
     new_U.energy[i] = rho_i * e_i + kinetic;
 }
 
-// ============================================================================
-// Step 3: Kernel for update
-// ============================================================================
 
 template<int dim, typename Number>
 __global__ void copy_density_kernel(
@@ -244,8 +251,8 @@ __global__ void copy_density_kernel(
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-    
+
     new_U.rho[i] = old_U.rho[i];
 }
 
-#endif // PARABOLIC_KERNELS_CUH
+#endif

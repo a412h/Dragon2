@@ -56,23 +56,23 @@ struct RiemannSolver {
         const Number p_j   = primitive_type_j.data[2];
 
         const Number p_max = fmax(p_i, p_j);
-        
+
         Number radicand_i = Number(2.) * p_max;
         radicand_i /= rho_i * (gamma_plus_one * p_max + gamma_minus_one * p_i);
-        
+
         const Number x_i = sqrt(radicand_i);
-        
+
         Number radicand_j = Number(2.) * p_max;
         radicand_j /= rho_j * (gamma_plus_one * p_max + gamma_minus_one * p_j);
-        
+
         const Number x_j = sqrt(radicand_j);
-        
+
         const Number a = x_i + x_j;
         const Number b = u_j - u_i;
         const Number c = -p_i * x_i - p_j * x_j;
-        
+
         const Number base = (-b + sqrt(b * b - Number(4.) * a * c)) / (Number(2.) * a);
-        
+
         const Number p_2_tilde = base * base;
 
         return p_2_tilde;
@@ -88,20 +88,20 @@ struct RiemannSolver {
         const Number p_i   = primitive_type_i.data[2];
         const Number rho_j = primitive_type_j.data[0];
         const Number u_j   = primitive_type_j.data[1];
-        const Number p_j   = primitive_type_j.data[2];        
+        const Number p_j   = primitive_type_j.data[2];
 
         const Number p_max = fmax(p_i, p_j);
 
-        const Number radicand_inverse_i = Number(0.5) * rho_i * 
+        const Number radicand_inverse_i = Number(0.5) * rho_i *
             (gamma_plus_one * p_max + gamma_minus_one * p_i);
-        
+
         const Number value_i = (p_max - p_i) / sqrt(radicand_inverse_i);
-        
-        const Number radicand_inverse_j = Number(0.5) * rho_j * 
+
+        const Number radicand_inverse_j = Number(0.5) * rho_j *
             (gamma_plus_one * p_max + gamma_minus_one * p_j);
-        
+
         const Number value_j = (p_max - p_j) / sqrt(radicand_inverse_j);
-        
+
         return value_i + value_j + u_j - u_i;
     }
 
@@ -109,7 +109,7 @@ struct RiemannSolver {
     static Number positive_part(Number x) {
         return fmax(x, Number(0));
     }
-    
+
     __device__
     static Number negative_part(Number x) {
         return fmax(-x, Number(0));
@@ -121,7 +121,7 @@ struct RiemannSolver {
         const Number p_star)
     {
         const Number factor = gamma_plus_one * Number(0.5) * gamma_inverse;
-        
+
         const Number rho = primitive_type.data[0];
         const Number u = primitive_type.data[1];
         const Number p = primitive_type.data[2];
@@ -129,7 +129,7 @@ struct RiemannSolver {
         const Number inv_p = Number(1.) / p;
 
         const Number tmp = positive_part((p_star - p) * inv_p);
-        
+
         return u - a * sqrt(Number(1.) + factor * tmp);
     }
 
@@ -139,17 +139,17 @@ struct RiemannSolver {
         const Number p_star)
     {
         const Number factor = gamma_plus_one * Number(0.5) * gamma_inverse;
-        
+
         const Number rho = primitive_type.data[0];
         const Number u = primitive_type.data[1];
         const Number p = primitive_type.data[2];
         const Number a = primitive_type.data[3];
-        const Number inv_p = Number(1.) / p;        
+        const Number inv_p = Number(1.) / p;
 
         const Number tmp = positive_part((p_star - p) * inv_p);
-        
+
         return u + a * sqrt(Number(1.) + factor * tmp);
-    }         
+    }
 
     __device__
     static Number compute_lambda(
@@ -160,7 +160,7 @@ struct RiemannSolver {
         const Number nu_11 = lambda1_minus(primitive_type_i, p_star);
         const Number nu_32 = lambda3_plus(primitive_type_j, p_star);
 
-        return fmax(positive_part(nu_32), negative_part(nu_11));    
+        return fmax(positive_part(nu_32), negative_part(nu_11));
     }
 
     __device__
@@ -197,7 +197,6 @@ struct RiemannSolver {
         return lambda_max;
     }
 
-    // Designed for local arrays
     __device__
     static PT riemann_data_from_state_local(
         const Number U_local[dim+2],
@@ -209,7 +208,7 @@ struct RiemannSolver {
         Number proj_m = 0.;
         for (int k = 0; k < dim; ++k)
             proj_m += n_ij[k] * U_local[1+k];
-        
+
         Number perp_sq = Number(0);
         for (int k = 0; k < dim; ++k) {
             Number perp_k = U_local[1+k] - proj_m * n_ij[k];
@@ -217,16 +216,16 @@ struct RiemannSolver {
         }
 
         const auto E = U_local[dim+1] - Number(0.5) * perp_sq * rho_inverse;
-        
+
         const auto p = gamma_minus_one * (E - Number(0.5) * proj_m * proj_m * rho_inverse);
         const auto a = sqrt(gamma * p * rho_inverse);
 
         PT result;
         result.data[0] = rho;
-        result.data[1] = proj_m * rho_inverse;  // normal velocity
+        result.data[1] = proj_m * rho_inverse;
         result.data[2] = p;
         result.data[3] = a;
-        
+
         return result;
     }
 
@@ -243,4 +242,4 @@ struct RiemannSolver {
     }
 };
 
-#endif // RIEMANN_SOLVER_CUH
+#endif

@@ -1,6 +1,3 @@
-/*
-HSSDP approach
-*/
 
 #ifndef DATA_STRUCT_CUH
 #define DATA_STRUCT_CUH
@@ -11,27 +8,26 @@ HSSDP approach
 #include <array>
 #include "configuration.h"
 #include "output.h"
+
+enum class TimeScheme { ERK33_CN, SSPRK33_CN };
 #include "offline_data.h"
 
-// Macro for error checking
 #define CUDA_CHECK(call) { cudaError_t error = call; if (error != cudaSuccess) { fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); exit(1);} }
 
-// Structure of arrays for State
 template<int dim, typename Number>
 struct State {
-    Number* rho;           // Density array [n_dofs]
-    Number* momentum_x;    // Momentum X array [n_dofs]
-    Number* momentum_y;    // Momentum Y array [n_dofs] (if dim >= 2)
-    Number* momentum_z;    // Momentum Z array [n_dofs] (if dim == 3)
-    Number* energy;        // Energy array [n_dofs]
-    
-    // Function to get all momentum pointers
+    Number* rho;
+    Number* momentum_x;
+    Number* momentum_y;
+    Number* momentum_z;
+    Number* energy;
+
     __device__ __host__ Number* momentum(int d) {
         if (d == 0) return momentum_x;
         else if (d == 1) return momentum_y;
         else return momentum_z;
     }
-    
+
     __device__ __host__ const Number* momentum(int d) const {
         if (d == 0) return momentum_x;
         else if (d == 1) return momentum_y;
@@ -39,7 +35,6 @@ struct State {
     }
 };
 
-// Flux
 template<int dim, typename Number>
 struct Flux {
     static constexpr int problem_dimension = dim + 2;
@@ -48,7 +43,6 @@ struct Flux {
     __host__ __device__ const Number& operator()(int component, int dimension) const;
 };
 
-// Momentum
 template<int dim, typename Number>
 struct Momentum {
     Number data[dim];
@@ -56,7 +50,6 @@ struct Momentum {
     __device__ const Number& operator[](int i) const { return data[i]; }
 };
 
-// Matrix structures
 template<typename Number>
 struct MijMatrix {
     int* row_offsets;
@@ -87,6 +80,9 @@ struct BoundaryData {
     int* boundary_ids;
     Number* boundary_normals;
     int n_boundary_dofs;
+
+    int* bc_type;
+    int* bc_index;
 };
 
 struct CouplingPairs {
@@ -102,15 +98,14 @@ struct Sparsity {
     int* transpose_indices;
 };
 
-// P_ij and r_i structures for SoA data
 template<int dim, typename Number>
 struct Pij {
-    Number* p_rho;           // [nnz]
-    Number* p_momentum_x;    // [nnz]
-    Number* p_momentum_y;    // [nnz] (if dim >= 2)
-    Number* p_momentum_z;    // [nnz] (if dim == 3)
-    Number* p_energy;        // [nnz]
-    
+    Number* p_rho;
+    Number* p_momentum_x;
+    Number* p_momentum_y;
+    Number* p_momentum_z;
+    Number* p_energy;
+
     __device__ __host__ Number* p_momentum(int d) {
         if (d == 0) return p_momentum_x;
         else if (d == 1) return p_momentum_y;
@@ -120,12 +115,12 @@ struct Pij {
 
 template<int dim, typename Number>
 struct Ri {
-    Number* r_rho;           // [n_dofs]
-    Number* r_momentum_x;    // [n_dofs]
-    Number* r_momentum_y;    // [n_dofs] (if dim >= 2)
-    Number* r_momentum_z;    // [n_dofs] (if dim == 3)
-    Number* r_energy;        // [n_dofs]
-    
+    Number* r_rho;
+    Number* r_momentum_x;
+    Number* r_momentum_y;
+    Number* r_momentum_z;
+    Number* r_energy;
+
     __device__ __host__ Number* r_momentum(int d) {
         if (d == 0) return r_momentum_x;
         else if (d == 1) return r_momentum_y;
@@ -133,7 +128,6 @@ struct Ri {
     }
 };
 
-// ERK33Params
 template<int dim, typename Number>
 struct ERK33Params {
     int n_steps_per_batch;
@@ -180,7 +174,6 @@ struct PrimitiveType {
     Number data[riemann_data_size];
 };
 
-// Flux implementation
 
 template<int dim, typename Number>
 __host__ __device__ Number& Flux<dim, Number>::operator()(int component, int dimension) {
@@ -193,7 +186,6 @@ __host__ __device__ const Number& Flux<dim, Number>::operator()(int component, i
 }
 
 
-// Functions for allocation / deallocation on device (SoA)
 
 template<int dim, typename Number>
 void allocate_state(State<dim, Number>& state, int n_dofs) {
@@ -273,8 +265,7 @@ void free_ri(Ri<dim, Number>& ri) {
     CUDA_CHECK(cudaFree(ri.r_energy));
 }
 
-// Time loop declaration
-template<int dim, typename Number_cu>
+template<int dim, typename Number_cu, TimeScheme scheme>
 Number_cu cuda_time_loop(
     const MijMatrix<Number_cu>& d_mij_matrix,
     const MiMatrix<Number_cu>& d_mi_matrix,
@@ -292,4 +283,4 @@ Number_cu cuda_time_loop(
     const OfflineData<dim, double>& offline_data,
     VTUOutput<dim>* output_handler);
 
-#endif // DATA_STRUCT_CUH
+#endif
