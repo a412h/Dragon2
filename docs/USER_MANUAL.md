@@ -19,7 +19,7 @@ only Q1 continuous elements, with conformal meshes.
 ```bash
 mkdir build && cd build
 cmake -DDEAL_II_DIR=/path/to/dealii/install ..
-make -j$(nproc)
+make
 ```
 
 You must provide the path to your deal.II installation via DEAL_II_DIR.

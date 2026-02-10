@@ -22,7 +22,7 @@ CUDA / C++ Transient Direct Navier-Stokes Solver
 ```bash
 mkdir build && cd build
 cmake -DDEAL_II_DIR=/path/to/dealii/install ..
-make -j$(nproc)
+make
 ```
 
 Set DEAL_II_DIR to the path of deal.II installation
