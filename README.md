@@ -54,7 +54,6 @@ The build step detects GPU architecture (on CMake 3.24+, on older CMake versions
 ## Documentation
 
 - [User Manual](docs/USER_MANUAL.md)
-- [Test Cases](docs/TEST_CASES.md)
 
 ## License
 
