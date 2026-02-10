@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="drg2_pixelated_nobg.png"/>
+</div>
+
 # Dragon2 Solver
 
 CUDA / C++ Transient Direct Navier-Stokes Solver
