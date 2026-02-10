@@ -31,7 +31,7 @@ make -j$(nproc)
 
 Set DEAL_II_DIR to the path of deal.II installation
 
-The build step detects GPU architecture (on CMake 3.24+.)
+The build step detects GPU architecture (on CMake 3.24+).
 On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 
 ## Quick Start
