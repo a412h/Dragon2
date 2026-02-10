@@ -51,7 +51,6 @@ On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 ## Documentation
 
 - [User Manual](docs/USER_MANUAL.md)
-- [Test Cases](docs/TEST_CASES.md)
 
 ## License
 
