@@ -2,7 +2,7 @@
 
 ## Overview
 
-Dragon2 is a GPU-accelerated NS direct compressible. At the moment it uses
+Dragon2 is a GPU-accelerated NS direct compressible solver. At the moment it uses
 only Q1 continuous elements, with conformal meshes.
 
 ### System Requirements
