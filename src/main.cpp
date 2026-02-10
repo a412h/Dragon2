@@ -195,25 +195,16 @@ void run_simulation(const Configuration& config) {
     std::cout << "  CFL min: " << config.cfl_min << std::endl;
     std::cout << "  CFL max: " << config.cfl_max << std::endl;
     std::cout << "  CFL number: " << config.cfl_number << std::endl;
-    std::cout << "  Mesh refinement: " << config.mesh_refinement << std::endl;
     std::cout << "  timer_granularity = " << config.timer_granularity << std::endl;
 
     dealii::Triangulation<dim> triangulation;
-    if (config.geometry_type == "mesh_file") {
-        BoundaryMapping bc_mapping = parse_boundary_mapping(
-            config.boundary_mapping,
-            config.default_boundary_condition);
-        GmshMeshReader<dim>::read_mesh(
-            triangulation,
-            config.mesh_file_path,
-            bc_mapping,
-            config.mesh_refinement);
-
-    }
-    else {
-        throw std::runtime_error("Unknown geometry type: " + config.geometry_type
-            + ". Use 'mesh_file' with an external .msh file.");
-    }
+    BoundaryMapping bc_mapping = parse_boundary_mapping(
+        config.boundary_mapping,
+        config.default_boundary_condition);
+    GmshMeshReader<dim>::read_mesh(
+        triangulation,
+        config.mesh_file_path,
+        bc_mapping);
 
     std::cout << "Mesh: " << triangulation.n_active_cells() << " cells, "
               << triangulation.n_vertices() << " vertices" << std::endl;

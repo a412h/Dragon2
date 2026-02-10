@@ -21,9 +21,6 @@ public:
     double lambda = 0.0;
     double kappa = 0.0;
 
-    std::string geometry_type = "mesh_file";
-    int mesh_refinement = 2;
-
     std::string mesh_file_path = "";
     std::string boundary_mapping = "";
     std::string default_boundary_condition = "do_nothing";
@@ -74,8 +71,6 @@ private:
 
         prm.enter_subsection("C - Discretization");
         {
-            prm.declare_entry("geometry", "mesh_file", dealii::Patterns::Anything());
-            prm.declare_entry("mesh refinement", "2", dealii::Patterns::Integer());
             prm.enter_subsection("mesh_file");
             {
                 prm.declare_entry("file path", "", dealii::Patterns::Anything(),
@@ -140,8 +135,6 @@ private:
 
         prm.enter_subsection("C - Discretization");
         {
-            geometry_type = prm.get("geometry");
-            mesh_refinement = prm.get_integer("mesh refinement");
             prm.enter_subsection("mesh_file");
             {
                 mesh_file_path = prm.get("file path");
@@ -195,7 +188,6 @@ private:
         std::cout << "  Final time: " << final_time << std::endl;
         std::cout << "  CFL: " << cfl_number << " (min: " << cfl_min << ", max: " << cfl_max << ")" << std::endl;
         std::cout << "  Time scheme: " << time_scheme << std::endl;
-        std::cout << "  Mesh refinement: " << mesh_refinement << std::endl;
 
         std::cout << "\n  Physics parameters:" << std::endl;
         std::cout << "    gamma: " << gamma << std::endl;

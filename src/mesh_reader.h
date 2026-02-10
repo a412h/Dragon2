@@ -103,8 +103,7 @@ class GmshMeshReader {
 public:
     static void read_mesh(Triangulation<dim>& triangulation,
                           const std::string& filename,
-                          const BoundaryMapping& bc_mapping,
-                          int global_refinement = 0)
+                          const BoundaryMapping& bc_mapping)
     {
         std::cout << "\n========================================" << std::endl;
         std::cout << "GmshMeshReader: Loading " << dim << "D mesh" << std::endl;
@@ -154,11 +153,6 @@ public:
 
         apply_boundary_conditions(triangulation, bc_mapping);
 
-        if (global_refinement > 0) {
-            std::cout << "  Applying " << global_refinement << " levels of global refinement..." << std::endl;
-            triangulation.refine_global(global_refinement);
-        }
-
         print_mesh_info(triangulation);
 
         bc_mapping.print();
@@ -167,10 +161,9 @@ public:
 
     static void read_mesh_from_config(Triangulation<dim>& triangulation,
                                        const std::string& mesh_file,
-                                       const BoundaryMapping& bc_mapping,
-                                       int mesh_refinement)
+                                       const BoundaryMapping& bc_mapping)
     {
-        read_mesh(triangulation, mesh_file, bc_mapping, mesh_refinement);
+        read_mesh(triangulation, mesh_file, bc_mapping);
     }
 
 private:

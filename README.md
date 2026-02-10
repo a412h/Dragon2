@@ -1,24 +1,20 @@
-<div align="center">
-  <img src="drg2_pixelated_nobg.png"/>
-</div>
-
 # Dragon2 Solver
 
-Transient Direct Navier-Stokes Solver, written in CUDA / C++
+CUDA / C++ Transient Direct Navier-Stokes Solver
 
 ## Features
 
 - Fast implementation
 - 2D and 3D simulations
-- Simple use: just load Gmsh mesh (.msh format), set boundary conditions, run
+- Simple use: just load Gmsh mesh (.msh format), setup boundary and initial conditions
 
 ## Requirements
 
-- NVIDIA GPU (RTX 3000/4000/5000 series or compatible)
-- CUDA Toolkit 12.0+
-- deal.II 9.3+ (finite element library)
-- CMake 3.18+
-- Linux (Ubuntu 22.04+ recommended)
+- NVIDIA GPU (tested on RTX 4000 and 5000)
+- CUDA
+- deal.II
+- CMake
+- Linux (Ubuntu)
 - OpenMP
 
 ## Building
@@ -31,12 +27,13 @@ make -j$(nproc)
 
 Set DEAL_II_DIR to the path of deal.II installation
 
-The build step detects GPU architecture (on CMake 3.24+, on older CMake versions it compiles for sm_86, sm_89, and sm_100).
+The build step detects GPU architecture (on CMake 3.24+).
+On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 
 ## Quick Start
 
 ```bash
-./solver_ns examples/cylinder-2d.cfg
+./solver_ns cases/cylinder-2d.cfg
 ./solver_ns --help
 ```
 
@@ -54,13 +51,11 @@ The build step detects GPU architecture (on CMake 3.24+, on older CMake versions
 ## Documentation
 
 - [User Manual](docs/USER_MANUAL.md)
+- [Test Cases](docs/TEST_CASES.md)
 
 ## License
 
 Licensed under the Apache License 2.0. See LICENSE for details.
-
-## Sponsor - Consulting
-Consider contacting us if you need new functionalities
 
 ### - These are extracts of transcient Navier-Stokes simulations -
 

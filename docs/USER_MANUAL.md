@@ -2,12 +2,12 @@
 
 ## Overview
 
-Dragon2 is a GPU-accelerated NS direct compressible solver. At the moment it uses
+Dragon2 is a GPU-accelerated NS, direct, compressible, transient, solver. At the moment it uses
 only Q1 continuous elements, with conformal meshes.
 
 ### System Requirements
 
-- NVIDIA GPU with CUDA support (RTX 4000/5000 series tested)
+- NVIDIA GPU with CUDA support (RTX 4000 / 5000 series tested)
 - CUDA 12.0 or later
 - deal.II 9.3+ or later
 - Linux (Ubuntu 24.04+)
@@ -51,14 +51,10 @@ subsection B - Equation
 end
 
 subsection C - Discretization
-    set geometry        = mesh_file
-    set mesh refinement = 0
-
     subsection mesh_file
         set file path                  = cases/my_mesh.msh
         set boundary mapping           = 1:dirichlet, 2:slip, 3:no_slip
         set default boundary condition = do_nothing
-        set scale                      = 1.0
     end
 end
 
@@ -99,21 +95,13 @@ end
 | lambda | 0.0 |
 | kappa | 0.0 |
 
-### C - Discretization Section
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| geometry | Le maillage | - |
-| mesh refinement | Additional uniform refinement levels | 0 |
-
-#### mesh_file Subsection
+### C - Discretization Section (mesh_file)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | file path | Path to .msh file | - |
 | boundary mapping | Physical ID to BC mapping | - |
 | default boundary condition | Default BC type | do_nothing |
-| scale | Mesh scale factor | 1.0 |
 
 ### E - InitialValues Section
 
@@ -171,28 +159,31 @@ Dragon2 reads Gmsh MSH format files
 
 ### Mesh Requirements
 
-- Only rectangle or hexahedrons, conformal mesh
+- Only rectangle or hexahedrons with conformal mesh
 
 ---
 
 ## Example Cases
 
-Dragon includes several example configurations in the examples/ directory:
+Dragon2 includes several example configurations in the cases/ directory:
 
 ### 1. cylinder-2d.cfg - 2D Cylinder Flow
-Run: ./solver_ns examples/cylinder-2d.cfg
+Run: ./solver_ns cases/cylinder-2d.cfg
 
-### 2. sphere-channel-3d.cfg - 3D Sphere in Channel
-Run: ./solver_ns examples/sphere-channel-3d.cfg
+### 2. cylinder-3d.cfg - 3D Cylinder Flow
+Run: ./solver_ns cases/cylinder-3d.cfg
 
-### 3. capsule-2d.cfg - 2D Reentry Capsule
-Run: ./solver_ns examples/capsule-2d.cfg
+### 3. sphere-channel-3d.cfg - 3D Sphere in Channel
+Run: ./solver_ns cases/sphere-channel-3d.cfg
 
-### 4. capsule-3d.cfg - 3D Hypersonic Capsule
-Run: ./solver_ns examples/capsule-3d.cfg
+### 4. capsule-2d.cfg - 2D Reentry Capsule
+Run: ./solver_ns cases/capsule-2d.cfg
 
-### 5. oat15a-2d.cfg - Transonic Airfoil
-Run: ./solver_ns examples/oat15a-2d.cfg
+### 5. capsule-3d.cfg - 3D Hypersonic Capsule
+Run: ./solver_ns cases/capsule-3d.cfg
+
+### 6. oat15a-2d.cfg - Transonic Airfoil
+Run: ./solver_ns cases/oat15a-2d.cfg
 
 ---
 
