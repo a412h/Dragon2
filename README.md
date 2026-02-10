@@ -58,7 +58,10 @@ On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 
 ## License
 
-Licensed under the Apache License 2.0. See LICENSE for details.
+Dragon2 is licensed under the Apache License 2.0. See LICENSE for details.
+
+## Sponsor - Consulting
+Consider contacting us if you need new functionalities 
 
 ### - These are extracts of transcient Navier-Stokes simulations -
 
