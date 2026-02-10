@@ -61,6 +61,9 @@ On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 
 Licensed under the Apache License 2.0. See LICENSE for details.
 
+## Sponsor - Consulting
+Consider contacting us if you need new functionalities
+
 ### - These are extracts of transcient Navier-Stokes simulations -
 
 #### Cylinder Mach3, resp. in 2d and 3d:

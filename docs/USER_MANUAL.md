@@ -219,11 +219,11 @@ Open VTU files in ParaView:
 
 ### Available Fields
 
-- rho: Density
-- momentum: Momentum vector (m_x, m_y, m_z)
-- energy: Total energy
-- pressure: Computed from conservative variables
-- schlieren: Density gradient magnitude (shock visualization)
+- rho
+- momentum
+- energy
+- pressure
+- schlieren
 
 ---
 
