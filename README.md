@@ -4,7 +4,7 @@
 
 # Dragon2 Solver
 
-CUDA / C++ Transient Direct Navier-Stokes Solver
+CUDA / C++ Transient Direct Compressible Navier-Stokes Solver
 
 ## Features
 
