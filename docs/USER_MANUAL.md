@@ -231,4 +231,4 @@ Dragon2 is licensed under the Apache License 2.0. See LICENSE for details.
 ---
 
 ## Sponsor - Consulting
-Consider contacting us if you need new functionalities 
+Consider contacting us if you need new functionalities.
