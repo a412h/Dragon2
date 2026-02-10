@@ -6,7 +6,7 @@ CUDA / C++ Transient Direct Navier-Stokes Solver
 
 - Fast implementation
 - 2D and 3D simulations
-- Simple use: just load Gmsh mesh (.msh format), setup boundary and initial conditions
+- Simple use: just load Gmsh mesh (.msh file), setup boundary and initial conditions
 
 ## Requirements
 
