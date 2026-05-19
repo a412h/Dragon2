@@ -1,8 +1,5 @@
-# Dragon2 - 3D Sphere in Channel Test Case
-#
-
 subsection A - TimeLoop
-    set basename          = run/sphere-channel-3d
+    set basename          = cylinder-3d
     set final time        = 5.0
     set timer granularity = 0.1
 end
@@ -11,14 +8,12 @@ subsection B - Equation
     set dimension = 3
     set equation  = navier_stokes
     set gamma     = 1.4
-    set mu        = 1.0e-3
-    set lambda    = 0.0
-    set kappa     = 0.0
 end
 
 subsection C - Discretization
+
     subsection mesh_file
-        set file path                  = cases/sphere-channel-3d.msh
+        set file path                  = ../cases/cylinder-3d.msh
         set boundary mapping           = 0:do_nothing, 2:slip, 4:dirichlet
         set default boundary condition = do_nothing
     end

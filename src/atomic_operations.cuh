@@ -15,6 +15,13 @@ __device__ __forceinline__ void atomicMinNumber(float* addr, float value) {
 }
 
 __device__ __forceinline__ void atomicMinNumber(double* addr, double value) {
+    unsigned long long* address_as_ull = (unsigned long long*)addr;
+    unsigned long long old = *address_as_ull, assumed;
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed,
+            __double_as_longlong(fmin(value, __longlong_as_double(assumed))));
+    } while (assumed != old);
 }
 
 __device__ __forceinline__ void atomicMin_custom(float* address, float val) {
@@ -37,4 +44,4 @@ __device__ __forceinline__ void atomicMin_custom(double* address, double val) {
     } while (assumed != old);
 }
 
-#endif
+#endif 

@@ -15,6 +15,23 @@
 #include "offline_data.h"
 #include "parabolic_solver.cuh"
 
+template<int dim, typename Number>
+__global__ void apply_periodic_constraints_kernel(
+    State<dim, Number> U,
+    const int* slave_idx,
+    const int* master_idx,
+    int n_pairs)
+{
+    const int p = blockIdx.x * blockDim.x + threadIdx.x;
+    if (p >= n_pairs) return;
+    const int s = slave_idx[p];
+    const int m = master_idx[p];
+    U.rho[s]        = U.rho[m];
+    U.momentum_x[s] = U.momentum_x[m];
+    if constexpr (dim >= 2) U.momentum_y[s] = U.momentum_y[m];
+    if constexpr (dim == 3) U.momentum_z[s] = U.momentum_z[m];
+    U.energy[s]     = U.energy[m];
+}
 
 void compute_transpose_indices(
     int* d_transpose_indices,
@@ -23,6 +40,7 @@ void compute_transpose_indices(
     int n_dofs,
     int nnz)
 {
+
     std::vector<int> h_row_offsets(n_dofs + 1);
     std::vector<int> h_col_indices(nnz);
     std::vector<int> h_transpose_indices(nnz, -1);
@@ -77,6 +95,7 @@ void copy_state(State<dim, Number>& dst, const State<dim, Number>& src,
 template<int dim, typename Number>
 class StageExecutor {
 private:
+
     State<dim, Number> d_U;
     State<dim, Number> d_temp_0;
     State<dim, Number> d_temp_1;
@@ -115,6 +134,11 @@ private:
     const int nnz;
     const Number mu;
     const Number cv_inverse_kappa;
+    const bool is_navier_stokes;
+
+    int* d_slave_idx_local;
+    int* d_master_idx_local;
+    int n_periodic_pairs;
 
     cudaStream_t stream;
     const OfflineData<dim, double>& offline_data;
@@ -171,6 +195,10 @@ public:
         int _nnz,
         Number _mu,
         Number _cv_inverse_kappa,
+        bool _is_navier_stokes,
+        int* _d_slave_idx,
+        int* _d_master_idx,
+        int _n_periodic_pairs,
         const OfflineData<dim, double>& _offline_data,
         cudaStream_t _stream)
         : d_U(_d_U), d_temp_0(_d_temp_0), d_temp_1(_d_temp_1), d_temp_2(_d_temp_2), d_temp_3(_d_temp_3),
@@ -186,6 +214,10 @@ public:
           measure_of_omega(_measure_of_omega), cfl(_cfl), evc_factor(_evc_factor),
           n_dofs(_n_dofs), nnz(_nnz),
           mu(_mu), cv_inverse_kappa(_cv_inverse_kappa),
+          is_navier_stokes(_is_navier_stokes),
+          d_slave_idx_local(_d_slave_idx),
+          d_master_idx_local(_d_master_idx),
+          n_periodic_pairs(_n_periodic_pairs),
           stream(_stream),
           offline_data(_offline_data),
           parabolic_solver(n_dofs, _mu, _cv_inverse_kappa, _stream)
@@ -279,79 +311,144 @@ public:
     static constexpr Number w_0d25 = Number(0.25);
     static constexpr Number w_0d66 = Number(2.0 / 3.0);
     static constexpr Number w_0d33 = Number(1.0 / 3.0);
-    static constexpr Number efficiency_s_erk33cn = Number(3.0);
-    static constexpr Number efficiency_s_ssprk33cn = Number(2.0);
+    static constexpr Number efficiency_euler = Number(3.0);
+    static constexpr Number efficiency_ns = Number(6.0);
     static constexpr State<dim, Number> null_v_w = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
-    template<TimeScheme scheme>
-    Number execute_timestep(Number tau_max)
+    Number current_time = Number(0);
+
+    Number execute_timestep(Number tau_max) {
+        if (is_navier_stokes) {
+            return execute_timestep_ns(tau_max);
+        } else {
+            return execute_timestep_euler(tau_max);
+        }
+    }
+
+    Number execute_timestep_euler(Number tau_max)
     {
-        if constexpr (scheme == TimeScheme::ERK33_CN) {
-            prepare_state_hyperbolic(d_U);
-            Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau_max / efficiency_s_erk33cn);
+        prepare_state_hyperbolic(d_U);
+        Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau_max / efficiency_euler);
 
-            prepare_state_hyperbolic(d_temp_0);
-            compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_U, null_v_w, w_m1, w_0, w_2, tau);
+        prepare_state_hyperbolic(d_temp_0);
+        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_U, null_v_w, w_m1, w_0, w_2, tau);
 
-            prepare_state_hyperbolic(d_temp_1);
-            compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_U, d_temp_0, w_0d75, w_m2, w_2d25, tau);
+        prepare_state_hyperbolic(d_temp_1);
+        compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_U, d_temp_0, w_0d75, w_m2, w_2d25, tau);
 
-            parabolic_solver.compute_step_parabolic(d_temp_2, d_temp_3, tau);
+        copy_state(d_U, d_temp_2, n_dofs, stream);
+        return efficiency_euler * tau;
+    }
 
-            prepare_state_hyperbolic(d_temp_3);
-            compute_step_hyperbolic(0, d_temp_3, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+    Number execute_timestep_ns(Number tau_max)
+    {
+        const Number t_start = current_time;
 
-            prepare_state_hyperbolic(d_temp_0);
-            compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_temp_3, null_v_w, w_m1, w_0, w_2, tau);
+        current_time = t_start;
+        prepare_state_hyperbolic(d_U);
+        Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau_max / efficiency_ns);
 
-            prepare_state_hyperbolic(d_temp_1);
-            compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_temp_3, d_temp_0, w_0d75, w_m2, w_2d25, tau);
+        current_time = t_start + tau;
+        prepare_state_hyperbolic(d_temp_0);
+        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_U, null_v_w, w_m1, w_0, w_2, tau);
 
-            copy_state(d_U, d_temp_2, n_dofs, stream);
+        current_time = t_start + Number(2) * tau;
+        prepare_state_hyperbolic(d_temp_1);
+        compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_U, d_temp_0, w_0d75, w_m2, w_2d25, tau);
 
-            return efficiency_s_erk33cn * tau;
-        }
-        else if constexpr (scheme == TimeScheme::SSPRK33_CN) {
-            prepare_state_hyperbolic(d_U);
-            Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau_max / efficiency_s_ssprk33cn);
+        current_time = t_start + Number(3) * tau;
+        prepare_state_hyperbolic(d_temp_2);
 
-            prepare_state_hyperbolic(d_temp_0);
-            compute_step_hyperbolic(0, d_temp_0, d_temp_1, null_v_w, null_v_w, w_0, w_0, w_1, tau);
-            sadd(d_temp_1, d_U, w_0d25, w_0d75);
+        check_nan(d_temp_2, "after 1st ERK33 block");
 
-            prepare_state_hyperbolic(d_temp_1);
-            compute_step_hyperbolic(0, d_temp_1, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
-            sadd(d_temp_0, d_U, w_0d66, w_0d33);
+        parabolic_solver.compute_step_parabolic(
+            d_temp_2, d_temp_3, Number(3.0) * tau, true);
 
-            parabolic_solver.compute_step_parabolic(d_temp_0, d_temp_2, tau);
+        apply_periodic_constraints(d_temp_3);
 
-            prepare_state_hyperbolic(d_temp_2);
-            compute_step_hyperbolic(0, d_temp_2, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
+        check_nan(d_temp_3, "after parabolic");
 
-            prepare_state_hyperbolic(d_temp_0);
-            compute_step_hyperbolic(0, d_temp_0, d_temp_1, null_v_w, null_v_w, w_0, w_0, w_1, tau);
-            sadd(d_temp_1, d_temp_2, w_0d25, w_0d75);
+        current_time = t_start + Number(3) * tau;
+        prepare_state_hyperbolic(d_temp_3);
+        compute_step_hyperbolic(0, d_temp_3, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
 
-            prepare_state_hyperbolic(d_temp_1);
-            compute_step_hyperbolic(0, d_temp_1, d_temp_0, null_v_w, null_v_w, w_0, w_0, w_1, tau);
-            sadd(d_temp_0, d_temp_2, w_0d66, w_0d33);
+        current_time = t_start + Number(4) * tau;
+        prepare_state_hyperbolic(d_temp_0);
+        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_temp_3, null_v_w, w_m1, w_0, w_2, tau);
 
-            copy_state(d_U, d_temp_0, n_dofs, stream);
+        current_time = t_start + Number(5) * tau;
+        prepare_state_hyperbolic(d_temp_1);
+        compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_temp_3, d_temp_0, w_0d75, w_m2, w_2d25, tau);
 
-            return efficiency_s_ssprk33cn * tau;
-        }
+        check_nan(d_temp_2, "after 2nd ERK33 block");
+
+        current_time = t_start + Number(6) * tau;
+        prepare_state_hyperbolic(d_temp_2);
+
+        copy_state(d_U, d_temp_2, n_dofs, stream);
+        return efficiency_ns * tau;
     }
 
 private:
 
+    void apply_periodic_constraints(State<dim, Number>& state_vector)
+    {
+        if (n_periodic_pairs <= 0) return;
+        const int blocks = (n_periodic_pairs + 255) / 256;
+        apply_periodic_constraints_kernel<dim, Number><<<blocks, 256, 0, stream>>>(
+            state_vector, d_slave_idx_local, d_master_idx_local, n_periodic_pairs);
+    }
+
+    bool check_nan(const State<dim, Number>& , const std::string& ) {
+        return false;
+    }
+
     void prepare_state_hyperbolic(State<dim, Number>& state_vector)
     {
-        prepare_state_kernel<dim, Number><<<prepareConfig.blocksPerGrid,
-                                            prepareConfig.threadsPerBlock,
-                                            0, stream>>>(
-            state_vector, d_pressure, d_speed_of_sound, d_precomputed,
-            d_boundary_data, inflow_rho, inflow_momentum_x, inflow_momentum_y,
-            inflow_momentum_z, inflow_energy, n_dofs);
+        check_nan(state_vector, "BEFORE prepare_state_hyperbolic");
+
+        apply_periodic_constraints(state_vector);
+        check_nan(state_vector, "AFTER apply_periodic_constraints");
+
+        const int n_entries = d_boundary_data.n_boundary_dofs;
+        if (n_entries > 0) {
+            const int blocks_entries = (n_entries + 255) / 256;
+
+            apply_dirichlet_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
+                state_vector,
+                d_boundary_data.boundary_dofs,
+                d_boundary_data.boundary_ids,
+                n_entries,
+                inflow_rho, inflow_momentum_x, inflow_momentum_y,
+                inflow_momentum_z, inflow_energy);
+
+            apply_no_slip_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
+                state_vector,
+                d_boundary_data.boundary_dofs,
+                d_boundary_data.boundary_ids,
+                n_entries);
+
+            apply_slip_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
+                state_vector,
+                d_boundary_data.boundary_dofs,
+                d_boundary_data.boundary_ids,
+                d_boundary_data.boundary_normals,
+                n_entries);
+
+            apply_dynamic_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
+                state_vector,
+                d_boundary_data.boundary_dofs,
+                d_boundary_data.boundary_ids,
+                d_boundary_data.boundary_normals,
+                inflow_rho, inflow_momentum_x, inflow_momentum_y,
+                inflow_momentum_z, inflow_energy,
+                n_entries);
+        }
+
+        compute_derived_quantities_kernel<dim, Number><<<prepareConfig.blocksPerGrid,
+                                                          prepareConfig.threadsPerBlock,
+                                                          0, stream>>>(
+            state_vector, d_pressure, d_speed_of_sound, d_precomputed, n_dofs);
     }
 
     Number compute_step_hyperbolic(int stage,
@@ -376,7 +473,7 @@ private:
             int boundary_blocks = (d_coupling_pairs.n_boundary_pairs + 255) / 256;
             if (boundary_blocks > 0) {
                 complete_boundaries_kernel<dim, Number><<<boundary_blocks, 256, 0, stream>>>(
-                    d_old_state_vector, d_dij, d_mij, d_cij, d_coupling_pairs);
+                    d_old_state_vector, d_dij, d_mij, d_cij, d_sparsity, d_coupling_pairs);
             }
 
             Number initial_tau = Number(1e20);
@@ -430,10 +527,9 @@ private:
             dst, src, s, b, n_dofs);
     }
 
-
 };
 
-template<int dim, typename Number_cu, TimeScheme scheme>
+template<int dim, typename Number_cu>
 Number_cu cuda_time_loop(
     const MijMatrix<Number_cu>& d_mij_matrix,
     const MiMatrix<Number_cu>& d_mi_matrix,
@@ -451,6 +547,7 @@ Number_cu cuda_time_loop(
     const OfflineData<dim, double>& offline_data,
     VTUOutput<dim>* output_handler)
 {
+
     cudaStream_t compute_stream, output_stream;
     CUDA_CHECK(cudaStreamCreate(&compute_stream));
     CUDA_CHECK(cudaStreamCreate(&output_stream));
@@ -507,6 +604,27 @@ Number_cu cuda_time_loop(
 
     const Number_cu mu = static_cast<Number_cu>(config.mu);
     const Number_cu kappa = static_cast<Number_cu>(config.kappa);
+    const bool is_navier_stokes = config.is_navier_stokes();
+
+    std::vector<int> h_slave_idx;
+    std::vector<int> h_master_idx;
+    for (int i = 0; i < n_dofs; ++i) {
+        if (static_cast<int>(offline_data.periodic_master[i]) != i) {
+            h_slave_idx.push_back(i);
+            h_master_idx.push_back(static_cast<int>(offline_data.periodic_master[i]));
+        }
+    }
+    const int n_periodic_pairs = static_cast<int>(h_slave_idx.size());
+    int *d_slave_idx = nullptr, *d_master_idx = nullptr;
+    if (n_periodic_pairs > 0) {
+        CUDA_CHECK(cudaMalloc(&d_slave_idx, n_periodic_pairs * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_master_idx, n_periodic_pairs * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(d_slave_idx, h_slave_idx.data(),
+                              n_periodic_pairs * sizeof(int), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_master_idx, h_master_idx.data(),
+                              n_periodic_pairs * sizeof(int), cudaMemcpyHostToDevice));
+        std::cout << "  Periodic-y pairs on GPU: " << n_periodic_pairs << std::endl;
+    }
 
     Number_cu inflow_rho = rho_inf;
     Number_cu inflow_momentum_x = rho_inf * u_inf;
@@ -514,21 +632,23 @@ Number_cu cuda_time_loop(
     Number_cu inflow_momentum_z = (dim == 3) ? (rho_inf * w_inf) : Number_cu(0);
     Number_cu inflow_energy = E_inf;
 
-    std::vector<Number_cu> h_init_rho(n_dofs, inflow_rho);
-    std::vector<Number_cu> h_init_mx(n_dofs, inflow_momentum_x);
-    std::vector<Number_cu> h_init_my(n_dofs, inflow_momentum_y);
-    std::vector<Number_cu> h_init_mz(n_dofs, inflow_momentum_z);
-    std::vector<Number_cu> h_init_e(n_dofs, inflow_energy);
+    {
+        std::vector<Number_cu> h_init_rho(n_dofs, inflow_rho);
+        std::vector<Number_cu> h_init_mx(n_dofs, inflow_momentum_x);
+        std::vector<Number_cu> h_init_my(n_dofs, inflow_momentum_y);
+        std::vector<Number_cu> h_init_mz(n_dofs, inflow_momentum_z);
+        std::vector<Number_cu> h_init_e(n_dofs, inflow_energy);
 
-    CUDA_CHECK(cudaMemcpy(d_U.rho, h_init_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_init_mx.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    if constexpr (dim >= 2) {
-        CUDA_CHECK(cudaMemcpy(d_U.momentum_y, h_init_my.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_U.rho, h_init_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_init_mx.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        if constexpr (dim >= 2) {
+            CUDA_CHECK(cudaMemcpy(d_U.momentum_y, h_init_my.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        }
+        if constexpr (dim == 3) {
+            CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_init_mz.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        }
+        CUDA_CHECK(cudaMemcpy(d_U.energy, h_init_e.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
     }
-    if constexpr (dim == 3) {
-        CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_init_mz.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    }
-    CUDA_CHECK(cudaMemcpy(d_U.energy, h_init_e.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
 
     prepare_state<dim, Number_cu>(
         d_U, d_precomputed, d_boundary_data,
@@ -551,7 +671,10 @@ Number_cu cuda_time_loop(
         d_boundary_data, d_coupling_pairs,
         inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
         measure_of_omega, static_cast<Number_cu>(config.cfl_number),
-        Number_cu(1.0), n_dofs, nnz_mij, mu, kappa, offline_data, compute_stream);
+        Number_cu(1.0), n_dofs, nnz_mij, mu, kappa,
+        is_navier_stokes,
+        d_slave_idx, d_master_idx, n_periodic_pairs,
+        offline_data, compute_stream);
 
     cudaEvent_t prof_start, prof_stop;
     CUDA_CHECK(cudaEventCreate(&prof_start));
@@ -590,25 +713,28 @@ Number_cu cuda_time_loop(
 
     async_writer.enqueue_write(std::move(output_data), output_cycle++, static_cast<double>(t));
 
-    std::cout << "\nWarming up GPU..." << std::endl;
-    for (int warmup = 0; warmup < 10; ++warmup) {
-        Number_cu tau = stage_executor.template execute_timestep<scheme>(config.final_time);
-        t += tau;
-        step++;
-        if (t >= config.final_time) break;
-    }
+    {
+        std::cout << "\nWarming up GPU..." << std::endl;
+        for (int warmup = 0; warmup < 10; ++warmup) {
+            Number_cu tau = stage_executor.execute_timestep(config.final_time);
+            t += tau;
+            step++;
+            if (t >= config.final_time) break;
+        }
 
-    t = Number_cu(0);
-    step = 0;
-    CUDA_CHECK(cudaMemcpy(d_U.rho, h_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_momentum_x.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    if constexpr (dim >= 2) {
-        CUDA_CHECK(cudaMemcpy(d_U.momentum_y, h_momentum_y.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        t = Number_cu(0);
+        step = 0;
+        stage_executor.current_time = Number_cu(0);
+        CUDA_CHECK(cudaMemcpy(d_U.rho, h_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_momentum_x.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        if constexpr (dim >= 2) {
+            CUDA_CHECK(cudaMemcpy(d_U.momentum_y, h_momentum_y.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        }
+        if constexpr (dim == 3) {
+            CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_momentum_z.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        }
+        CUDA_CHECK(cudaMemcpy(d_U.energy, h_energy.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
     }
-    if constexpr (dim == 3) {
-        CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_momentum_z.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    }
-    CUDA_CHECK(cudaMemcpy(d_U.energy, h_energy.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
 
     std::cout << "\nStarting time integration..." << std::endl;
     std::cout << "  CFL: " << config.cfl_number << std::endl;
@@ -631,7 +757,7 @@ Number_cu cuda_time_loop(
 
         Number_cu batch_dt = 0;
         for (int batch_step = 0; batch_step < n_steps_per_batch; ++batch_step) {
-            Number_cu tau = stage_executor.template execute_timestep<scheme>(tau_max_remaining);
+            Number_cu tau = stage_executor.execute_timestep(tau_max_remaining - batch_dt);
             batch_dt += tau;
 
             if (t + batch_dt >= config.final_time) {
@@ -664,6 +790,7 @@ Number_cu cuda_time_loop(
 
         t += batch_dt;
         step += n_steps_per_batch;
+        stage_executor.current_time = Number_cu(t);
 
         if (t >= next_output_time || t >= config.final_time - 1e-10)
         {
@@ -696,13 +823,15 @@ Number_cu cuda_time_loop(
 
             Number_cu rho_min = h_rho[0], rho_max = h_rho[0];
             Number_cu E_min = h_energy[0], E_max = h_energy[0];
+            int idx_rho_min = 0, idx_rho_max = 0;
             for (int i = 1; i < n_dofs; ++i) {
-                rho_min = fmin(rho_min, h_rho[i]);
-                rho_max = fmax(rho_max, h_rho[i]);
+                if (h_rho[i] < rho_min) { rho_min = h_rho[i]; idx_rho_min = i; }
+                if (h_rho[i] > rho_max) { rho_max = h_rho[i]; idx_rho_max = i; }
                 E_min = fmin(E_min, h_energy[i]);
                 E_max = fmax(E_max, h_energy[i]);
             }
-            std::cout << "  Solution stats: rho=[" << rho_min << ", " << rho_max
+            std::cout << "  Solution stats: rho=[" << rho_min << " @ x=" << offline_data.node_positions[idx_rho_min][0]
+                      << ", " << rho_max << " @ x=" << offline_data.node_positions[idx_rho_max][0]
                       << "], E=[" << E_min << ", " << E_max << "]" << std::endl;
 
             async_writer.enqueue_write(std::move(output_data), output_cycle++, static_cast<double>(t));
@@ -769,53 +898,31 @@ Number_cu cuda_time_loop(
     CUDA_CHECK(cudaStreamDestroy(compute_stream));
     CUDA_CHECK(cudaStreamDestroy(output_stream));
     CUDA_CHECK(cudaFree(d_transpose_indices));
+    if (d_slave_idx) CUDA_CHECK(cudaFree(d_slave_idx));
+    if (d_master_idx) CUDA_CHECK(cudaFree(d_master_idx));
 
     return t;
 }
 
-template float cuda_time_loop<2, float, TimeScheme::ERK33_CN>(
+template float cuda_time_loop<2, float>(
     const MijMatrix<float>&, const MiMatrix<float>&, const MiMatrixInverse<float>&,
     const CijMatrix<2, float>&, const Sparsity&, State<2, float>&,
     const BoundaryData<2, float>&, const CouplingPairs&, float, int, int, int,
     const Configuration&, const OfflineData<2, double>&, VTUOutput<2>*);
 
-template float cuda_time_loop<2, float, TimeScheme::SSPRK33_CN>(
-    const MijMatrix<float>&, const MiMatrix<float>&, const MiMatrixInverse<float>&,
-    const CijMatrix<2, float>&, const Sparsity&, State<2, float>&,
-    const BoundaryData<2, float>&, const CouplingPairs&, float, int, int, int,
-    const Configuration&, const OfflineData<2, double>&, VTUOutput<2>*);
-
-template double cuda_time_loop<2, double, TimeScheme::ERK33_CN>(
+template double cuda_time_loop<2, double>(
     const MijMatrix<double>&, const MiMatrix<double>&, const MiMatrixInverse<double>&,
     const CijMatrix<2, double>&, const Sparsity&, State<2, double>&,
     const BoundaryData<2, double>&, const CouplingPairs&, double, int, int, int,
     const Configuration&, const OfflineData<2, double>&, VTUOutput<2>*);
 
-template double cuda_time_loop<2, double, TimeScheme::SSPRK33_CN>(
-    const MijMatrix<double>&, const MiMatrix<double>&, const MiMatrixInverse<double>&,
-    const CijMatrix<2, double>&, const Sparsity&, State<2, double>&,
-    const BoundaryData<2, double>&, const CouplingPairs&, double, int, int, int,
-    const Configuration&, const OfflineData<2, double>&, VTUOutput<2>*);
-
-template float cuda_time_loop<3, float, TimeScheme::ERK33_CN>(
+template float cuda_time_loop<3, float>(
     const MijMatrix<float>&, const MiMatrix<float>&, const MiMatrixInverse<float>&,
     const CijMatrix<3, float>&, const Sparsity&, State<3, float>&,
     const BoundaryData<3, float>&, const CouplingPairs&, float, int, int, int,
     const Configuration&, const OfflineData<3, double>&, VTUOutput<3>*);
 
-template float cuda_time_loop<3, float, TimeScheme::SSPRK33_CN>(
-    const MijMatrix<float>&, const MiMatrix<float>&, const MiMatrixInverse<float>&,
-    const CijMatrix<3, float>&, const Sparsity&, State<3, float>&,
-    const BoundaryData<3, float>&, const CouplingPairs&, float, int, int, int,
-    const Configuration&, const OfflineData<3, double>&, VTUOutput<3>*);
-
-template double cuda_time_loop<3, double, TimeScheme::ERK33_CN>(
-    const MijMatrix<double>&, const MiMatrix<double>&, const MiMatrixInverse<double>&,
-    const CijMatrix<3, double>&, const Sparsity&, State<3, double>&,
-    const BoundaryData<3, double>&, const CouplingPairs&, double, int, int, int,
-    const Configuration&, const OfflineData<3, double>&, VTUOutput<3>*);
-
-template double cuda_time_loop<3, double, TimeScheme::SSPRK33_CN>(
+template double cuda_time_loop<3, double>(
     const MijMatrix<double>&, const MiMatrix<double>&, const MiMatrixInverse<double>&,
     const CijMatrix<3, double>&, const Sparsity&, State<3, double>&,
     const BoundaryData<3, double>&, const CouplingPairs&, double, int, int, int,

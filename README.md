@@ -36,21 +36,25 @@ On older CMake versions it compiles for sm_86, sm_89, and sm_100.
 
 ## Quick Start
 
+Run from inside the `build/` directory so VTU output lands next to the executable:
+
 ```bash
-./solver_ns cases/cylinder-2d.cfg
+cd build
+./solver_ns ../cases/cylinder-2d.prm
 ./solver_ns --help
 ```
 
 ## Example Cases
 
-| Config | Description | Dim |
-|--------|-------------|-----|
-| cylinder-2d.cfg | Cylinder flow | 2D |
-| cylinder-3d.cfg | Cylinder flow | 3D |
-| sphere-channel-3d.cfg | Sphere in channel | 3D |
-| capsule-2d.cfg | Nasa capsule 120-CA Reentry | 2D |
-| capsule-3d.cfg | Nasa capsule 120-CA Reentry | 3D |
-| oat15a-2d.cfg | Onera OAT15a Transonic airfoil | 2D |
+| Parameter file | Description | Dim |
+|----------------|-------------|-----|
+| cylinder-2d.prm | Cylinder flow | 2D |
+| cylinder-3d.prm | Cylinder flow | 3D |
+| sphere-channel-3d.prm | Sphere in channel | 3D |
+| capsule-2d.prm | Nasa capsule 120-CA Reentry | 2D |
+| capsule-3d.prm | Nasa capsule 120-CA Reentry | 3D |
+| oat15a-2d.prm | Onera OAT15a Transonic airfoil | 2D |
+
 
 ## Documentation
 
@@ -82,7 +86,7 @@ Consider contacting us if you need new functionalities.
 
 #### Atmospheric-entry of Nasa Capsule 120-CA
 
-##### mesh with dealii:
+##### mesh:
 
 ![Flow 2D](nasa_120_ca_mesh.png)
 

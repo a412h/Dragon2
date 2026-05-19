@@ -50,6 +50,7 @@ struct Indicator {
                    const Number* c_ij,
                    const Number* precomputed)
     {
+
         const Number s_j = precomputed[j * 2];
         const Number eta_j = precomputed[j * 2 + 1];
 
@@ -144,4 +145,4 @@ __global__ void compute_alpha_kernel(
     alpha_i[i] = indicator.alpha(hd_i, evc_factor);
 }
 
-#endif
+#endif 

@@ -28,14 +28,19 @@ You must provide the path to your deal.II installation via DEAL_II_DIR.
 
 ## Quick Start
 
+Run from inside the `build/` directory so VTU output files land next to the
+executable:
+
 ```bash
-./solver_ns config.cfg
+cd build
+./solver_ns ../cases/cylinder-2d.prm
 ./solver_ns --help
 ```
 
 ## Configuration File Format
 
-Dragon uses .cfg configuration files. For example:
+Dragon2 uses `.prm` parameter files (deal.II `ParameterHandler` format).
+For example:
 
 ```
 subsection A - TimeLoop
@@ -46,14 +51,14 @@ end
 
 subsection B - Equation
     set dimension = 2
-    set equation  = navier stokes
+    set equation  = navier_stokes
     set gamma     = 1.4
 end
 
 subsection C - Discretization
     subsection mesh_file
-        set file path                  = cases/my_mesh.msh
-        set boundary mapping           = 1:dirichlet, 2:slip, 3:no_slip
+        set file path                  = ../cases/my_mesh.msh
+        set boundary mapping           = 0:do_nothing, 2:slip, 4:dirichlet
         set default boundary condition = do_nothing
     end
 end
@@ -95,13 +100,17 @@ end
 | lambda | 0.0 |
 | kappa | 0.0 |
 
-### C - Discretization Section (mesh_file)
+### C - Discretization Section
+
+Subsection `mesh_file`:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| file path | Path to .msh file | - |
-| boundary mapping | Physical ID to BC mapping | - |
-| default boundary condition | Default BC type | do_nothing |
+| file path | Path to `.msh` file (relative to cwd) | - |
+| boundary mapping | Comma-separated list of `phys_id:bc_type` pairs (see below) | (empty) |
+| default boundary condition | BC type for any physical ID not listed in the mapping | `do_nothing` |
+
+Available BC types: `do_nothing`, `periodic`, `slip`, `no_slip`, `dirichlet`, `dynamic`.
 
 ### E - InitialValues Section
 
@@ -125,65 +134,76 @@ end
 |------|-------------|----------|
 | do_nothing, slip, no_slip, dirichlet, dynamic |
 
-### Boundary Mapping Syntax
+### Boundary mapping syntax
 
-In the .cfg file, map Gmsh physical IDs to boundary conditions:
+In the `.prm` file, map each Gmsh physical ID to a BC type:
 
 ```
-set boundary mapping = phys_id1:bc_type, phys_id2:bc_type, ...
+set boundary mapping = phys_id1:bc_type1, phys_id2:bc_type2, ...
 ```
 
 Example:
+
 ```
 set boundary mapping = 1:dirichlet, 2:slip, 3:no_slip, 5:dynamic
 ```
+
+Physical IDs that don't appear in the mapping take the `default boundary
+condition` value.
 
 ---
 
 ## Mesh Requirements
 
-Dragon2 reads Gmsh MSH format files
+Dragon2 reads Gmsh MSH format files.
 
 ### Creating Meshes in Gmsh
 
 1. Create your geometry in Gmsh
-2. Define Physical Groups for boundaries
-3. Generate mesh
-4. Export as .msh file
+2. Define Physical Groups for boundaries — use the numeric IDs above
+3. Generate the mesh
+4. Export as `.msh` file
 
 ### Physical IDs
 
-- Assign unique physical IDs to each boundary surface
-- Map these IDs in your configuration file
-- Unmapped IDs use the default boundary condition
+- Assign each boundary face its numeric ID from the table above
+- Unmapped IDs are treated as the `do_nothing` default
 
 ### Mesh Requirements
 
-- Only rectangle or hexahedrons with conformal mesh
+- Quadrilaterals (2D) or hexahedra (3D), conformal
 
 ---
 
 ## Example Cases
 
-Dragon2 includes several example configurations in the cases/ directory:
+Dragon2 includes several example parameter files in `cases/`. All assume you
+run from inside the `build/` directory so VTU output lands next to the
+executable.
 
-### 1. cylinder-2d.cfg - 2D Cylinder Flow
-Run: ./solver_ns cases/cylinder-2d.cfg
+### 1. cylinder-2d.prm — 2D Cylinder Flow
+`./solver_ns ../cases/cylinder-2d.prm`
 
-### 2. cylinder-3d.cfg - 3D Cylinder Flow
-Run: ./solver_ns cases/cylinder-3d.cfg
+### 2. cylinder-3d.prm — 3D Cylinder Flow
+`./solver_ns ../cases/cylinder-3d.prm`
 
-### 3. sphere-channel-3d.cfg - 3D Sphere in Channel
-Run: ./solver_ns cases/sphere-channel-3d.cfg
+### 3. sphere-channel-3d.prm — 3D Sphere in Channel
+`./solver_ns ../cases/sphere-channel-3d.prm`
 
-### 4. capsule-2d.cfg - 2D Reentry Capsule
-Run: ./solver_ns cases/capsule-2d.cfg
+### 4. capsule-2d.prm — 2D Reentry Capsule
+`./solver_ns ../cases/capsule-2d.prm`
 
-### 5. capsule-3d.cfg - 3D Hypersonic Capsule
-Run: ./solver_ns cases/capsule-3d.cfg
+### 5. capsule-3d.prm — 3D Hypersonic Capsule
+`./solver_ns ../cases/capsule-3d.prm`
 
-### 6. oat15a-2d.cfg - Transonic Airfoil
-Run: ./solver_ns cases/oat15a-2d.cfg
+### 6. oat15a-2d.prm — Transonic Airfoil
+`./solver_ns ../cases/oat15a-2d.prm`
+
+### Note on 3D cases
+
+`main.cpp` is compiled with `constexpr int dim = 2`. To run a 3D case
+(`cylinder-3d.prm`, `capsule-3d.prm`, `sphere-channel-3d.prm`), edit that
+line to `constexpr int dim = 3` and rebuild.
 
 ---
 

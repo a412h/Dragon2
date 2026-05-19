@@ -1,5 +1,7 @@
 Foreword:
-Dragon is an independent CUDA / C++ implementation inspired by the ryujin project
+Dragon2 is an independent CUDA / C++ implementation of the paper by
+Guermond et al. On the implementation of a robust and efficient finite element-based parallel solver for the compressible Navier–Stokes equations,
+and is inspired by the ryujin project
 (https://github.com/conservation-laws/ryujin), which is licensed under the
 Apache License 2.0 with LLVM Exception. Please refer to ryujin repository for
 its authors and license.
@@ -9,5 +11,5 @@ This project is licensed under the terms of the Apache License 2.0 with LLVM
 Exception.
 
 For files in this repository:
-    Copyright (C) 2025 by the author of Dragon
+    Copyright (C) 2025 by the author of Dragon2
 

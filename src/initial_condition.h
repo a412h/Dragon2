@@ -4,8 +4,8 @@
 #include <iostream>
 #include <vector>
 #include <array>
+#include <random>
 #include <cmath>
-
 
 class InitialCondition {
 public:
@@ -15,6 +15,7 @@ public:
                            const std::array<double, 3>& primitive,
                            const std::array<double, 2>& direction = {{1.0, 0.0}},
                            const double gamma = 1.4) {
+
         const double rho = primitive[0];
         const double vel_mag = primitive[1];
         const double p = primitive[2];
@@ -35,7 +36,7 @@ public:
 
         const double angle_deg = std::atan2(direction[1], direction[0]) * 180.0 / M_PI;
         if (std::abs(angle_deg) > 0.01) {
-            std::cout << "  Angle of attack: " << angle_deg << " deg" << std::endl;
+            std::cout << "  Angle of attack: " << angle_deg << "°" << std::endl;
         }
 
         std::cout << "  Conservative: [" << conservative[0] << ", "

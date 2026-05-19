@@ -1,21 +1,19 @@
-# Dragon2 - 3D Capsule Reentry Test Case
-#
-
 subsection A - TimeLoop
-    set basename          = run/capsule-3d
+    set basename          = capsule-3d
     set final time        = 100.0
     set timer granularity = 1.0
 end
 
 subsection B - Equation
     set dimension = 3
-    set equation  = navier stokes
+    set equation  = navier_stokes
     set gamma     = 1.4
 end
 
 subsection C - Discretization
+
     subsection mesh_file
-        set file path                  = cases/capsule-3d.msh
+        set file path                  = ../cases/capsule-3d.msh
         set boundary mapping           = 3:no_slip, 5:dynamic
         set default boundary condition = do_nothing
     end

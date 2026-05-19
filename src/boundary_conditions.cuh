@@ -7,9 +7,11 @@
 
 template<int dim, typename Number, int component>
 __device__ void prescribe_riemann_characteristic(
+
     Number rho_first,
     Number momentum_first[dim],
     Number energy_first,
+
     Number rho_second,
     Number momentum_second[dim],
     Number energy_second,
@@ -48,7 +50,6 @@ __device__ void prescribe_riemann_characteristic(
     }
     vn_second *= rho_second_inv;
 
-
     const Number R_1 = (component == 1)
         ? (vn_second - Number(2.0) * a_second / PF::gamma_minus_one)
         : (vn_first - Number(2.0) * a_first / PF::gamma_minus_one);
@@ -86,6 +87,161 @@ __device__ void prescribe_riemann_characteristic(
 }
 
 template<int dim, typename Number>
+__global__ void apply_dirichlet_bc_kernel(
+    State<dim, Number> U,
+    const int* boundary_dofs,
+    const int* boundary_ids,
+    int n_boundary_dofs,
+    Number inflow_rho,
+    Number inflow_momentum_x,
+    Number inflow_momentum_y,
+    Number inflow_momentum_z,
+    Number inflow_energy)
+{
+    const int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= n_boundary_dofs) return;
+    if (boundary_ids[eid] != 4) return;
+
+    const int idx = boundary_dofs[eid];
+    U.rho[idx] = inflow_rho;
+    U.momentum_x[idx] = inflow_momentum_x;
+    if constexpr (dim >= 2) U.momentum_y[idx] = inflow_momentum_y;
+    if constexpr (dim == 3) U.momentum_z[idx] = inflow_momentum_z;
+    U.energy[idx] = inflow_energy;
+}
+
+template<int dim, typename Number>
+__global__ void apply_no_slip_bc_kernel(
+    State<dim, Number> U,
+    const int* boundary_dofs,
+    const int* boundary_ids,
+    int n_boundary_dofs)
+{
+    const int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= n_boundary_dofs) return;
+    if (boundary_ids[eid] != 3) return;
+
+    const int idx = boundary_dofs[eid];
+    U.momentum_x[idx] = Number(0);
+    if constexpr (dim >= 2) U.momentum_y[idx] = Number(0);
+    if constexpr (dim == 3) U.momentum_z[idx] = Number(0);
+}
+
+template<int dim, typename Number>
+__global__ void apply_slip_bc_kernel(
+    State<dim, Number> U,
+    const int* boundary_dofs,
+    const int* boundary_ids,
+    const Number* boundary_normals,
+    int n_boundary_dofs)
+{
+    const int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= n_boundary_dofs) return;
+    if (boundary_ids[eid] != 2) return;
+
+    const int idx = boundary_dofs[eid];
+
+    Number normal[dim];
+    #pragma unroll
+    for (int d = 0; d < dim; ++d) {
+        normal[d] = boundary_normals[eid * dim + d];
+    }
+
+    Number momentum[dim];
+    momentum[0] = U.momentum_x[idx];
+    if constexpr (dim >= 2) momentum[1] = U.momentum_y[idx];
+    if constexpr (dim == 3) momentum[2] = U.momentum_z[idx];
+
+    Number m_dot_n = Number(0);
+    #pragma unroll
+    for (int d = 0; d < dim; ++d) {
+        m_dot_n += momentum[d] * normal[d];
+    }
+
+    U.momentum_x[idx] = momentum[0] - m_dot_n * normal[0];
+    if constexpr (dim >= 2) U.momentum_y[idx] = momentum[1] - m_dot_n * normal[1];
+    if constexpr (dim == 3) U.momentum_z[idx] = momentum[2] - m_dot_n * normal[2];
+}
+
+template<int dim, typename Number>
+__global__ void apply_dynamic_bc_kernel(
+    State<dim, Number> U,
+    const int* boundary_dofs,
+    const int* boundary_ids,
+    const Number* boundary_normals,
+    Number inflow_rho,
+    Number inflow_momentum_x,
+    Number inflow_momentum_y,
+    Number inflow_momentum_z,
+    Number inflow_energy,
+    int n_boundary_dofs)
+{
+    using PF = PhysicsFunctions<dim, Number>;
+    const int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= n_boundary_dofs) return;
+    if (boundary_ids[eid] != 5) return;
+
+    const int idx = boundary_dofs[eid];
+
+    Number normal[dim];
+    #pragma unroll
+    for (int d = 0; d < dim; ++d) {
+        normal[d] = boundary_normals[eid * dim + d];
+    }
+
+    const Number rho_curr = U.rho[idx];
+    Number m_curr[dim];
+    m_curr[0] = U.momentum_x[idx];
+    if constexpr (dim >= 2) m_curr[1] = U.momentum_y[idx];
+    if constexpr (dim == 3) m_curr[2] = U.momentum_z[idx];
+    const Number E_curr = U.energy[idx];
+
+    const Number rho_inv = Number(1.0) / rho_curr;
+    const Number a = PF::speed_of_sound(U, idx);
+
+    Number vn = Number(0);
+    #pragma unroll
+    for (int d = 0; d < dim; ++d) vn += m_curr[d] * normal[d];
+    vn *= rho_inv;
+
+    Number momentum_bar[dim];
+    momentum_bar[0] = inflow_momentum_x;
+    if constexpr (dim >= 2) momentum_bar[1] = inflow_momentum_y;
+    if constexpr (dim == 3) momentum_bar[2] = inflow_momentum_z;
+
+    Number result[dim + 2];
+
+    if (vn < -a) {
+        U.rho[idx] = inflow_rho;
+        U.momentum_x[idx] = inflow_momentum_x;
+        if constexpr (dim >= 2) U.momentum_y[idx] = inflow_momentum_y;
+        if constexpr (dim == 3) U.momentum_z[idx] = inflow_momentum_z;
+        U.energy[idx] = inflow_energy;
+    } else if (vn >= -a && vn <= Number(0)) {
+        prescribe_riemann_characteristic<dim, Number, 2>(
+            inflow_rho, momentum_bar, inflow_energy,
+            rho_curr, m_curr, E_curr,
+            normal, result);
+        U.rho[idx] = result[0];
+        U.momentum_x[idx] = result[1];
+        if constexpr (dim >= 2) U.momentum_y[idx] = result[2];
+        if constexpr (dim == 3) U.momentum_z[idx] = result[3];
+        U.energy[idx] = result[dim + 1];
+    } else if (vn > Number(0) && vn <= a) {
+        prescribe_riemann_characteristic<dim, Number, 1>(
+            rho_curr, m_curr, E_curr,
+            inflow_rho, momentum_bar, inflow_energy,
+            normal, result);
+        U.rho[idx] = result[0];
+        U.momentum_x[idx] = result[1];
+        if constexpr (dim >= 2) U.momentum_y[idx] = result[2];
+        if constexpr (dim == 3) U.momentum_z[idx] = result[3];
+        U.energy[idx] = result[dim + 1];
+    }
+
+}
+
+template<int dim, typename Number>
 __device__ void apply_boundary_conditions_device(
     State<dim, Number>& U,
     const BoundaryData<dim, Number>& boundary_data,
@@ -111,6 +267,7 @@ __device__ void apply_boundary_conditions_device(
         U.energy[idx] = inflow_energy;
     }
     else if (bid == 2) {
+
         Number normal[dim];
         #pragma unroll
         for (int d = 0; d < dim; ++d) {
@@ -133,11 +290,13 @@ __device__ void apply_boundary_conditions_device(
         if constexpr (dim == 3) U.momentum_z[idx] = momentum[2] - m_dot_n * normal[2];
     }
     else if (bid == 3) {
+
         U.momentum_x[idx] = Number(0);
         if constexpr (dim >= 2) U.momentum_y[idx] = Number(0);
         if constexpr (dim == 3) U.momentum_z[idx] = Number(0);
     }
     else if (bid == 5) {
+
         Number normal[dim];
         #pragma unroll
         for (int d = 0; d < dim; ++d) {
@@ -175,6 +334,7 @@ __device__ void apply_boundary_conditions_device(
             if constexpr (dim == 3) U.momentum_z[idx] = inflow_momentum_z;
             U.energy[idx] = inflow_energy;
         }
+
         else if (vn >= -a && vn <= Number(0)) {
             prescribe_riemann_characteristic<dim, Number, 2>(
                 inflow_rho, momentum_bar, inflow_energy,
@@ -187,6 +347,7 @@ __device__ void apply_boundary_conditions_device(
             if constexpr (dim == 3) U.momentum_z[idx] = result[3];
             U.energy[idx] = result[dim + 1];
         }
+
         else if (vn > Number(0) && vn <= a) {
             prescribe_riemann_characteristic<dim, Number, 1>(
                 rho_curr, m_curr, E_curr,
@@ -199,7 +360,9 @@ __device__ void apply_boundary_conditions_device(
             if constexpr (dim == 3) U.momentum_z[idx] = result[3];
             U.energy[idx] = result[dim + 1];
         }
+
     }
+
 }
 
 template<int dim, typename Number>

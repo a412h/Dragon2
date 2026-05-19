@@ -7,6 +7,7 @@
 #include <deal.II/base/quadrature_lib.h>
 
 namespace QuadratureData {
+
     __constant__ float c_quad_pts_2d[4][2] = {
         {-0.57735026918962576451f, -0.57735026918962576451f},
         { 0.57735026918962576451f, -0.57735026918962576451f},
@@ -73,7 +74,6 @@ __global__ void compute_viscous_heating_kernel(
     Number (&vel_elem)[nodes_per_elem][dim] =
         reinterpret_cast<Number(&)[nodes_per_elem][dim]>(s_vel_elem[tid]);
 
-
     constexpr int n_q_points = (dim == 2) ? 4 : 8;
     constexpr int jac_data_per_quad = (dim == 2) ? 8 : 18;
 
@@ -84,6 +84,7 @@ __global__ void compute_viscous_heating_kernel(
     }
 
     if constexpr (dim == 2) {
+
         const Number gp = Number(QuadratureData::c_gp);
 
         #pragma unroll 4
@@ -107,18 +108,18 @@ __global__ void compute_viscous_heating_kernel(
             Number phi[4];
             phi[0] = Number(0.25) * (1 - xi) * (1 - eta);
             phi[1] = Number(0.25) * (1 + xi) * (1 - eta);
-            phi[2] = Number(0.25) * (1 + xi) * (1 + eta);
-            phi[3] = Number(0.25) * (1 - xi) * (1 + eta);
+            phi[2] = Number(0.25) * (1 - xi) * (1 + eta);
+            phi[3] = Number(0.25) * (1 + xi) * (1 + eta);
 
             Number grad_phi_ref[4][2];
             grad_phi_ref[0][0] = -Number(0.25) * (1 - eta);
             grad_phi_ref[0][1] = -Number(0.25) * (1 - xi);
             grad_phi_ref[1][0] =  Number(0.25) * (1 - eta);
             grad_phi_ref[1][1] = -Number(0.25) * (1 + xi);
-            grad_phi_ref[2][0] =  Number(0.25) * (1 + eta);
-            grad_phi_ref[2][1] =  Number(0.25) * (1 + xi);
-            grad_phi_ref[3][0] = -Number(0.25) * (1 + eta);
-            grad_phi_ref[3][1] =  Number(0.25) * (1 - xi);
+            grad_phi_ref[2][0] = -Number(0.25) * (1 + eta);
+            grad_phi_ref[2][1] =  Number(0.25) * (1 - xi);
+            grad_phi_ref[3][0] =  Number(0.25) * (1 + eta);
+            grad_phi_ref[3][1] =  Number(0.25) * (1 + xi);
 
             Number grad_phi[4][2];
             #pragma unroll 4
@@ -173,6 +174,7 @@ __global__ void compute_viscous_heating_kernel(
 
         #pragma unroll 8
         for (int q = 0; q < 8; ++q) {
+
             const Number xi = Number(QuadratureData::c_quad_pts_3d[q][0]);
             const Number eta = Number(QuadratureData::c_quad_pts_3d[q][1]);
             const Number zeta = Number(QuadratureData::c_quad_pts_3d[q][2]);
@@ -203,12 +205,12 @@ __global__ void compute_viscous_heating_kernel(
             Number phi[8];
             phi[0] = Number(0.125) * (1 - xi) * (1 - eta) * (1 - zeta);
             phi[1] = Number(0.125) * (1 + xi) * (1 - eta) * (1 - zeta);
-            phi[2] = Number(0.125) * (1 + xi) * (1 + eta) * (1 - zeta);
-            phi[3] = Number(0.125) * (1 - xi) * (1 + eta) * (1 - zeta);
+            phi[2] = Number(0.125) * (1 - xi) * (1 + eta) * (1 - zeta);
+            phi[3] = Number(0.125) * (1 + xi) * (1 + eta) * (1 - zeta);
             phi[4] = Number(0.125) * (1 - xi) * (1 - eta) * (1 + zeta);
             phi[5] = Number(0.125) * (1 + xi) * (1 - eta) * (1 + zeta);
-            phi[6] = Number(0.125) * (1 + xi) * (1 + eta) * (1 + zeta);
-            phi[7] = Number(0.125) * (1 - xi) * (1 + eta) * (1 + zeta);
+            phi[6] = Number(0.125) * (1 - xi) * (1 + eta) * (1 + zeta);
+            phi[7] = Number(0.125) * (1 + xi) * (1 + eta) * (1 + zeta);
 
             Number grad_phi_ref[8][3];
             grad_phi_ref[0][0] = -Number(0.125) * (1 - eta) * (1 - zeta);
@@ -219,13 +221,13 @@ __global__ void compute_viscous_heating_kernel(
             grad_phi_ref[1][1] = -Number(0.125) * (1 + xi) * (1 - zeta);
             grad_phi_ref[1][2] = -Number(0.125) * (1 + xi) * (1 - eta);
 
-            grad_phi_ref[2][0] =  Number(0.125) * (1 + eta) * (1 - zeta);
-            grad_phi_ref[2][1] =  Number(0.125) * (1 + xi) * (1 - zeta);
-            grad_phi_ref[2][2] = -Number(0.125) * (1 + xi) * (1 + eta);
+            grad_phi_ref[2][0] = -Number(0.125) * (1 + eta) * (1 - zeta);
+            grad_phi_ref[2][1] =  Number(0.125) * (1 - xi) * (1 - zeta);
+            grad_phi_ref[2][2] = -Number(0.125) * (1 - xi) * (1 + eta);
 
-            grad_phi_ref[3][0] = -Number(0.125) * (1 + eta) * (1 - zeta);
-            grad_phi_ref[3][1] =  Number(0.125) * (1 - xi) * (1 - zeta);
-            grad_phi_ref[3][2] = -Number(0.125) * (1 - xi) * (1 + eta);
+            grad_phi_ref[3][0] =  Number(0.125) * (1 + eta) * (1 - zeta);
+            grad_phi_ref[3][1] =  Number(0.125) * (1 + xi) * (1 - zeta);
+            grad_phi_ref[3][2] = -Number(0.125) * (1 + xi) * (1 + eta);
 
             grad_phi_ref[4][0] = -Number(0.125) * (1 - eta) * (1 + zeta);
             grad_phi_ref[4][1] = -Number(0.125) * (1 - xi) * (1 + zeta);
@@ -235,13 +237,13 @@ __global__ void compute_viscous_heating_kernel(
             grad_phi_ref[5][1] = -Number(0.125) * (1 + xi) * (1 + zeta);
             grad_phi_ref[5][2] =  Number(0.125) * (1 + xi) * (1 - eta);
 
-            grad_phi_ref[6][0] =  Number(0.125) * (1 + eta) * (1 + zeta);
-            grad_phi_ref[6][1] =  Number(0.125) * (1 + xi) * (1 + zeta);
-            grad_phi_ref[6][2] =  Number(0.125) * (1 + xi) * (1 + eta);
+            grad_phi_ref[6][0] = -Number(0.125) * (1 + eta) * (1 + zeta);
+            grad_phi_ref[6][1] =  Number(0.125) * (1 - xi) * (1 + zeta);
+            grad_phi_ref[6][2] =  Number(0.125) * (1 - xi) * (1 + eta);
 
-            grad_phi_ref[7][0] = -Number(0.125) * (1 + eta) * (1 + zeta);
-            grad_phi_ref[7][1] =  Number(0.125) * (1 - xi) * (1 + zeta);
-            grad_phi_ref[7][2] =  Number(0.125) * (1 - xi) * (1 + eta);
+            grad_phi_ref[7][0] =  Number(0.125) * (1 + eta) * (1 + zeta);
+            grad_phi_ref[7][1] =  Number(0.125) * (1 + xi) * (1 + zeta);
+            grad_phi_ref[7][2] =  Number(0.125) * (1 + xi) * (1 + eta);
 
             Number grad_phi[8][3];
             #pragma unroll 8
@@ -342,6 +344,7 @@ public:
         std::cout << "    Elements: " << n_elements << std::endl;
 
         constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
+
         constexpr int n_q_points = (dim == 2) ? 4 : 8;
         constexpr int jac_data_per_quad = (dim == 2) ? 8 : 18;
         constexpr int jac_data_per_elem = n_q_points * jac_data_per_quad;
@@ -368,12 +371,14 @@ public:
 
         int elem_id = 0;
         for (const auto& cell : offline_data.dof_handler.active_cell_iterators()) {
+
             cell->get_dof_indices(local_dof_indices);
 
             for (unsigned int i = 0; i < nodes_per_elem; ++i) {
-                h_connectivity[elem_id * nodes_per_elem + i] = local_dof_indices[i];
+                const unsigned int orig = local_dof_indices[i];
+                const unsigned int master = offline_data.periodic_master[orig];
+                h_connectivity[elem_id * nodes_per_elem + i] = master;
             }
-
 
             fe_values.reinit(cell);
             for (unsigned int q = 0; q < quadrature.size(); ++q) {

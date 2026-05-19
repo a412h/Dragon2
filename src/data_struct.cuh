@@ -1,4 +1,3 @@
-
 #ifndef DATA_STRUCT_CUH
 #define DATA_STRUCT_CUH
 
@@ -8,8 +7,6 @@
 #include <array>
 #include "configuration.h"
 #include "output.h"
-
-enum class TimeScheme { ERK33_CN, SSPRK33_CN };
 #include "offline_data.h"
 
 #define CUDA_CHECK(call) { cudaError_t error = call; if (error != cudaSuccess) { fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); exit(1);} }
@@ -76,6 +73,7 @@ struct CijMatrix {
 
 template<int dim, typename Number>
 struct BoundaryData {
+
     int* boundary_dofs;
     int* boundary_ids;
     Number* boundary_normals;
@@ -174,7 +172,6 @@ struct PrimitiveType {
     Number data[riemann_data_size];
 };
 
-
 template<int dim, typename Number>
 __host__ __device__ Number& Flux<dim, Number>::operator()(int component, int dimension) {
     return F[component * dim + dimension];
@@ -184,8 +181,6 @@ template<int dim, typename Number>
 __host__ __device__ const Number& Flux<dim, Number>::operator()(int component, int dimension) const {
     return F[component * dim + dimension];
 }
-
-
 
 template<int dim, typename Number>
 void allocate_state(State<dim, Number>& state, int n_dofs) {
@@ -265,7 +260,7 @@ void free_ri(Ri<dim, Number>& ri) {
     CUDA_CHECK(cudaFree(ri.r_energy));
 }
 
-template<int dim, typename Number_cu, TimeScheme scheme>
+template<int dim, typename Number_cu>
 Number_cu cuda_time_loop(
     const MijMatrix<Number_cu>& d_mij_matrix,
     const MiMatrix<Number_cu>& d_mi_matrix,
@@ -283,4 +278,4 @@ Number_cu cuda_time_loop(
     const OfflineData<dim, double>& offline_data,
     VTUOutput<dim>* output_handler);
 
-#endif
+#endif 

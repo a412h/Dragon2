@@ -7,6 +7,7 @@
 
 template<int dim, typename Number>
 struct Limiter {
+
     static constexpr Number gamma = Number(1.4);
     static constexpr Number gamma_plus_one = Number(2.4);
     static constexpr Number gamma_minus_one = Number(0.4);
@@ -98,6 +99,7 @@ struct Limiter {
 
     __device__ __forceinline__
     Bounds get_bounds(Number hd_i) {
+
         Bounds relaxed = fully_relax_bounds(bounds_, hd_i);
 
         const Number eps = Number(1e-14);
@@ -204,7 +206,7 @@ struct Limiter {
             }
 
             const Number rho_r = U_r[0];
-            const Number rho_r_gamma = __powf(rho_r, gamma);
+            const Number rho_r_gamma = pow(rho_r, gamma);
             const Number rho_e_r = PF::internal_energy_local(U_r);
             const Number psi_r = relax_small * rho_r * rho_e_r - s_min * rho_r * rho_r_gamma;
 
@@ -220,7 +222,7 @@ struct Limiter {
             }
 
             const Number rho_l = PF::density_local(U_l);
-            const Number rho_l_gamma = __powf(rho_l, gamma);
+            const Number rho_l_gamma = pow(rho_l, gamma);
             const Number rho_e_l = PF::internal_energy_local(U_l);
             const Number psi_l = relax_small * rho_l * rho_e_l - s_min * rho_l * rho_l_gamma;
 
@@ -251,4 +253,4 @@ struct Limiter {
     }
 };
 
-#endif
+#endif 

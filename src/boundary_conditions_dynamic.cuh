@@ -111,6 +111,7 @@ __device__ void apply_boundary_conditions_device(
                 U.energy[idx] = inflow_energy;
             }
             else if (bid == 2) {
+
                 Number normal[dim];
                 for (int d = 0; d < dim; ++d) {
                     normal[d] = boundary_data.boundary_normals[b * dim + d];
@@ -131,11 +132,13 @@ __device__ void apply_boundary_conditions_device(
                 if constexpr (dim == 3) U.momentum_z[idx] = momentum[2] - m_dot_n * normal[2];
             }
             else if (bid == 3) {
+
                 U.momentum_x[idx] = Number(0);
                 if constexpr (dim >= 2) U.momentum_y[idx] = Number(0);
                 if constexpr (dim == 3) U.momentum_z[idx] = Number(0);
             }
             else if (bid == 5) {
+
                 Number normal[dim];
                 for (int d = 0; d < dim; ++d) {
                     normal[d] = boundary_data.boundary_normals[b * dim + d];
@@ -164,13 +167,16 @@ __device__ void apply_boundary_conditions_device(
                 Number result[dim + 2];
 
                 if (vn < -a) {
+
                     U.rho[idx] = inflow_rho;
                     U.momentum_x[idx] = inflow_momentum_x;
                     if constexpr (dim >= 2) U.momentum_y[idx] = inflow_momentum_y;
                     if constexpr (dim == 3) U.momentum_z[idx] = inflow_momentum_z;
                     U.energy[idx] = inflow_energy;
                 }
+
                 else if (vn >= -a && vn <= Number(0)) {
+
                     prescribe_riemann_characteristic<dim, Number, 2>(
                         U, idx, inflow_rho, momentum_bar, inflow_energy, normal, result);
 
@@ -180,7 +186,9 @@ __device__ void apply_boundary_conditions_device(
                     if constexpr (dim == 3) U.momentum_z[idx] = result[3];
                     U.energy[idx] = result[dim + 1];
                 }
+
                 else if (vn > Number(0) && vn <= a) {
+
                     prescribe_riemann_characteristic<dim, Number, 1>(
                         U, idx, inflow_rho, momentum_bar, inflow_energy, normal, result);
 
@@ -190,7 +198,9 @@ __device__ void apply_boundary_conditions_device(
                     if constexpr (dim == 3) U.momentum_z[idx] = result[3];
                     U.energy[idx] = result[dim + 1];
                 }
+
             }
+
         }
     }
 }

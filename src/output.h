@@ -15,7 +15,6 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
-#include <filesystem>
 
 #include "offline_data.h"
 
@@ -30,9 +29,6 @@ public:
               const std::string& basename,
               const OfflineData<dim, Number>& offline_data)
         : dof_handler(dof_handler), basename(basename), offline_data(offline_data) {
-        auto parent = std::filesystem::path(basename).parent_path();
-        if (!parent.empty())
-            std::filesystem::create_directories(parent);
     }
 
     void write(const std::vector<std::array<Number, dim+2>>& U,
@@ -128,6 +124,7 @@ private:
 
         #pragma omp parallel for
         for (unsigned int i = 0; i < n_dofs; ++i) {
+
             if (sparsity[i].size() == 1) {
                 schlieren[i] = Number(0);
                 continue;
@@ -169,6 +166,7 @@ private:
         #pragma omp parallel for
         for (unsigned int i = 0; i < n_dofs; ++i) {
             const Number q = schlieren[i];
+
             const Number ratio = std::max(Number(0), q - q_min - floor) / range;
             schlieren[i] = Number(1) - std::exp(-schlieren_beta * ratio);
         }
@@ -192,6 +190,7 @@ public:
     }
 
     ~AsyncVTUWriter() {
+
         {
             std::lock_guard<std::mutex> lock(queue_mutex);
             stop_flag = true;

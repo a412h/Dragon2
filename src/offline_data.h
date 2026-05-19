@@ -1,4 +1,3 @@
-
 #ifndef OFFLINE_DATA_H
 #define OFFLINE_DATA_H
 
@@ -9,7 +8,9 @@
 #include <deal.II/dofs/dof_tools.h>
 #include <deal.II/dofs/dof_renumbering.h>
 #include <deal.II/lac/dynamic_sparsity_pattern.h>
+#include <deal.II/lac/affine_constraints.h>
 #include <deal.II/base/quadrature_lib.h>
+#include <deal.II/grid/grid_tools.h>
 #include <vector>
 #include <array>
 #include <map>
@@ -24,6 +25,7 @@ using namespace dealii;
 template<int dim, typename Number = double>
 class OfflineData {
 public:
+
     struct BoundaryDescription {
         unsigned int dof_index;
         std::array<Number, dim> normal;
@@ -62,6 +64,9 @@ public:
     DoFHandler<dim> dof_handler;
     FE_Q<dim> finite_element;
 
+    std::vector<unsigned int> periodic_master;
+    AffineConstraints<Number> periodic_constraints;
+
     OfflineData(Triangulation<dim>& triangulation)
         : dof_handler(triangulation), finite_element(1) {
 
@@ -71,19 +76,74 @@ public:
 
         const unsigned int n_dofs = dof_handler.n_dofs();
 
+        periodic_constraints.clear();
+        {
+            std::vector<GridTools::PeriodicFacePair<
+                typename DoFHandler<dim>::cell_iterator>> dh_pairs;
+
+            GridTools::collect_periodic_faces(
+                dof_handler,
+                11,
+                12,
+                1,
+                dh_pairs);
+            if (!dh_pairs.empty()) {
+                DoFTools::make_periodicity_constraints<dim, dim>(
+                    dh_pairs, periodic_constraints);
+                std::cout << "  Periodic-y DOF pairs collected: "
+                          << dh_pairs.size() << " face pairs" << std::endl;
+            }
+        }
+        periodic_constraints.close();
+
+        periodic_master.resize(n_dofs);
+        for (unsigned int i = 0; i < n_dofs; ++i) periodic_master[i] = i;
+        int n_constrained = 0;
+        for (unsigned int i = 0; i < n_dofs; ++i) {
+            if (periodic_constraints.is_constrained(i)) {
+                ++n_constrained;
+                const auto *entries = periodic_constraints.get_constraint_entries(i);
+
+                if (entries && entries->size() == 1) {
+                    periodic_master[i] = (*entries)[0].first;
+                }
+            }
+        }
+
+        for (unsigned int i = 0; i < n_dofs; ++i) {
+            unsigned int m = periodic_master[i];
+            while (periodic_master[m] != m) m = periodic_master[m];
+            periodic_master[i] = m;
+        }
+        std::cout << "  Constrained DOFs (slaves): " << n_constrained << std::endl;
+
+        int printed = 0;
+        for (unsigned int i = 0; i < n_dofs && printed < 4; ++i) {
+            if (periodic_master[i] != i) {
+                std::cout << "    slave[" << i << "] -> master[" << periodic_master[i] << "]" << std::endl;
+                ++printed;
+            }
+        }
+
         DynamicSparsityPattern dsp(n_dofs, n_dofs);
-        DoFTools::make_sparsity_pattern(dof_handler, dsp);
+        DoFTools::make_sparsity_pattern(
+            dof_handler, dsp, periodic_constraints,
+            false);
 
         sparsity.resize(n_dofs);
         for (unsigned int i = 0; i < n_dofs; ++i) {
             sparsity[i].clear();
+
             sparsity[i].push_back(i);
-            for (auto it = dsp.begin(i); it != dsp.end(i); ++it) {
-                if (it->column() != i) {
-                    sparsity[i].push_back(it->column());
+
+            if (periodic_master[i] == i) {
+                for (auto it = dsp.begin(i); it != dsp.end(i); ++it) {
+                    if (it->column() != i) {
+                        sparsity[i].push_back(it->column());
+                    }
                 }
+                std::sort(sparsity[i].begin() + 1, sparsity[i].end());
             }
-            std::sort(sparsity[i].begin() + 1, sparsity[i].end());
         }
 
         lumped_mass_matrix.resize(n_dofs, Number(0));
@@ -102,7 +162,10 @@ public:
         compute_matrices();
 
         for (unsigned int i = 0; i < n_dofs; ++i) {
-            lumped_mass_matrix_inverse[i] = Number(1) / lumped_mass_matrix[i];
+            lumped_mass_matrix_inverse[i] =
+                (lumped_mass_matrix[i] > Number(0))
+                    ? Number(1) / lumped_mass_matrix[i]
+                    : Number(0);
         }
 
         boundary_map = construct_boundary_map();
@@ -118,6 +181,61 @@ public:
         std::cout << "  Boundary nodes: " << boundary_map.size() << std::endl;
         std::cout << "  Boundary coupling pairs: " << coupling_boundary_pairs.size() << std::endl;
         std::cout << "  Internal coupling pairs: " << coupling_internal_pairs.size() << std::endl;
+
+        Number mmin = lumped_mass_matrix[0], mmax = lumped_mass_matrix[0];
+        int zero_count = 0;
+        for (unsigned int i = 0; i < n_dofs; ++i) {
+            mmin = std::min(mmin, lumped_mass_matrix[i]);
+            mmax = std::max(mmax, lumped_mass_matrix[i]);
+            if (std::abs(lumped_mass_matrix[i]) < 1e-30) ++zero_count;
+        }
+        std::cout << "  lumped_mass range: [" << mmin << ", " << mmax << "]"
+                  << "  zero rows: " << zero_count << std::endl;
+
+        Number max_sum_c = 0;
+        int worst_i = -1;
+        for (unsigned int i = 0; i < n_dofs; ++i) {
+            std::array<Number, dim> s;
+            s.fill(0);
+            for (size_t k = 0; k < c_ij[i].size(); ++k)
+                for (int d = 0; d < dim; ++d) s[d] += c_ij[i][k][d];
+            Number ns = 0;
+            for (int d = 0; d < dim; ++d) ns += s[d] * s[d];
+            ns = std::sqrt(ns);
+            if (ns > max_sum_c) { max_sum_c = ns; worst_i = (int)i; }
+        }
+        std::cout << "  max |sum_j c_ij| = " << max_sum_c
+                  << " at idx=" << worst_i;
+        if (worst_i >= 0) {
+            std::cout << " (x=" << node_positions[worst_i][0] << ", y="
+                      << (dim>=2?node_positions[worst_i][1]:0)
+                      << ", master=" << periodic_master[worst_i]
+                      << ", n_neigh=" << sparsity[worst_i].size() << ")";
+        }
+        std::cout << std::endl;
+
+        int dup_count = 0;
+        for (unsigned int i = 0; i < n_dofs; ++i) {
+            std::vector<unsigned int> s = sparsity[i];
+            std::sort(s.begin(), s.end());
+            for (size_t k = 1; k < s.size(); ++k) {
+                if (s[k] == s[k - 1]) ++dup_count;
+            }
+        }
+        std::cout << "  Duplicate sparsity entries: " << dup_count << std::endl;
+
+        if (sparsity.size() > 1) {
+            std::cout << "  sparsity[1] (size=" << sparsity[1].size() << "):";
+            for (auto k : sparsity[1]) std::cout << " " << k;
+            std::cout << std::endl;
+            std::cout << "  c_ij[1]:";
+            for (size_t k = 0; k < sparsity[1].size(); ++k) {
+                std::cout << " (" << sparsity[1][k] << ":";
+                for (int d = 0; d < dim; ++d) std::cout << " " << c_ij[1][k][d];
+                std::cout << ")";
+            }
+            std::cout << std::endl;
+        }
     }
 
 private:
@@ -133,20 +251,31 @@ private:
         std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
         measure_of_omega = Number(0);
 
+        int n_cells_processed = 0;
+        int n_cells_with_slave = 0;
         for (const auto& cell : dof_handler.active_cell_iterators()) {
             fe_values.reinit(cell);
             cell->get_dof_indices(local_dof_indices);
+
+            std::vector<unsigned int> mapped_dofs(dofs_per_cell);
+            bool has_slave = false;
+            for (unsigned int k = 0; k < dofs_per_cell; ++k) {
+                mapped_dofs[k] = periodic_master[local_dof_indices[k]];
+                if (mapped_dofs[k] != local_dof_indices[k]) has_slave = true;
+            }
+            ++n_cells_processed;
+            if (has_slave) ++n_cells_with_slave;
 
             for (unsigned int q = 0; q < n_q_points; ++q) {
                 const Number JxW = fe_values.JxW(q);
                 measure_of_omega += JxW;
 
                 for (unsigned int i = 0; i < dofs_per_cell; ++i) {
-                    const unsigned int global_i = local_dof_indices[i];
+                    const unsigned int global_i = mapped_dofs[i];
                     const Number phi_i = fe_values.shape_value(i, q);
 
                     for (unsigned int j = 0; j < dofs_per_cell; ++j) {
-                        const unsigned int global_j = local_dof_indices[j];
+                        const unsigned int global_j = mapped_dofs[j];
                         const Number phi_j = fe_values.shape_value(j, q);
                         const Number mass_contribution = phi_i * phi_j * JxW;
 
@@ -161,7 +290,7 @@ private:
                     }
 
                     for (unsigned int j = 0; j < dofs_per_cell; ++j) {
-                        const unsigned int global_j = local_dof_indices[j];
+                        const unsigned int global_j = mapped_dofs[j];
                         const auto grad_phi_j = fe_values.shape_grad(j, q);
 
                         auto it = std::find(sparsity[global_i].begin(),
@@ -174,6 +303,21 @@ private:
                         }
                     }
                 }
+            }
+        }
+
+        std::cout << "  Cells processed: " << n_cells_processed
+                  << " with slave: " << n_cells_with_slave << std::endl;
+
+        if (lumped_mass_matrix.size() > 1)
+            std::cout << "  lumped_mass[1] BEFORE slave overwrite = "
+                      << lumped_mass_matrix[1] << std::endl;
+
+        for (unsigned int i = 0; i < lumped_mass_matrix.size(); ++i) {
+            if (periodic_master[i] != i) {
+                lumped_mass_matrix[i] = Number(0);
+                for (auto &mij : mass_matrix[i]) mij = Number(0);
+                for (auto &cij : c_ij[i]) cij.fill(Number(0));
             }
         }
     }
@@ -206,6 +350,8 @@ private:
                 if (!face->at_boundary()) continue;
 
                 const types::boundary_id id = face->boundary_id();
+
+                if (id == 11 || id == 12) continue;
                 fe_face_values.reinit(cell, f);
 
                 for (unsigned int j = 0; j < dofs_per_cell; ++j) {
@@ -302,6 +448,7 @@ private:
             }
         }
         if (n_dynamic > 0) {
+
             for (int d = 0; d < dim; ++d) {
                 sphere_center[d] = Number(0.5) * (min_pos[d] + max_pos[d]);
             }
@@ -316,6 +463,7 @@ private:
             auto [normal, normal_mass, boundary_mass, id, position] = data;
 
             if (id == 5 && n_dynamic > 0) {
+
                 Number radius = Number(0);
                 for (int d = 0; d < dim; ++d) {
                     normal[d] = position[d] - sphere_center[d];
@@ -327,6 +475,7 @@ private:
                 }
                 normal_mass = radius;
             } else {
+
                 Number norm_squared = Number(0);
                 for (int d = 0; d < dim; ++d) {
                     norm_squared += normal[d] * normal[d];
@@ -371,6 +520,7 @@ private:
     }
 
     CouplingBoundaryPairs collect_coupling_internal_pairs() {
+
         std::set<unsigned int> boundary_indices;
         for (const auto& bd : boundary_map)
             boundary_indices.insert(bd.dof_index);
@@ -378,6 +528,7 @@ private:
         CouplingBoundaryPairs result;
 
         for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i) {
+
             if (boundary_indices.find(i) != boundary_indices.end()) continue;
 
             const auto& sparsity_row = sparsity[i];

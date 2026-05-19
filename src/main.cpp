@@ -1,5 +1,5 @@
-
 #include <iostream>
+#include <fstream>
 #include <cuda_bf16.h>
 #include <deal.II/grid/tria.h>
 #include "mesh_reader.h"
@@ -7,7 +7,9 @@
 #include "data_struct.cuh"
 
 using Number = double;
+
 using Number_cu = float;
+constexpr int dim = 2;
 
 template<int dim, typename Number, typename Number_cu>
 void transfer_offline_data_to_gpu(
@@ -113,8 +115,11 @@ void transfer_boundary_data_to_gpu(
 
     for (size_t b = 0; b < boundary_dofs.size(); ++b) {
         const int dof = boundary_dofs[b];
-        bc_type[dof] = boundary_ids[b];
-        bc_index[dof] = static_cast<int>(b);
+
+        if (bc_type[dof] == -1) {
+            bc_type[dof] = boundary_ids[b];
+            bc_index[dof] = static_cast<int>(b);
+        }
     }
 
     CUDA_CHECK(cudaMalloc(&d_boundary_data.bc_type, n_dofs * sizeof(int)));
@@ -182,195 +187,170 @@ void transfer_boundary_data_to_gpu(
     measure_of_omega = static_cast<Number_cu>(offline_data.measure_of_omega);
 }
 
-template<int dim>
-void run_simulation(const Configuration& config) {
-
-    std::cout << "=== GPU-accelerated Navier-Stokes solver ===" << std::endl;
-    std::cout << "CPU Precision: " << (sizeof(Number) == 4 ? "float" : "double") << std::endl;
-    std::cout << "GPU Precision: " << (sizeof(Number_cu) == 4 ? "float" : "double") << std::endl;
-    std::cout << "Dimension: " << dim << "D" << std::endl;
-    std::cout << "Data Structure: Structure of Arrays (SoA)" << std::endl;
-    std::cout << "Configuration:" << std::endl;
-    std::cout << "  Final time: " << config.final_time << std::endl;
-    std::cout << "  CFL min: " << config.cfl_min << std::endl;
-    std::cout << "  CFL max: " << config.cfl_max << std::endl;
-    std::cout << "  CFL number: " << config.cfl_number << std::endl;
-    std::cout << "  timer_granularity = " << config.timer_granularity << std::endl;
-
-    dealii::Triangulation<dim> triangulation;
-    BoundaryMapping bc_mapping = parse_boundary_mapping(
-        config.boundary_mapping,
-        config.default_boundary_condition);
-    GmshMeshReader<dim>::read_mesh(
-        triangulation,
-        config.mesh_file_path,
-        bc_mapping);
-
-    std::cout << "Mesh: " << triangulation.n_active_cells() << " cells, "
-              << triangulation.n_vertices() << " vertices" << std::endl;
-
-    OfflineData<dim> offline_data(triangulation);
-    const int n_dofs = offline_data.dof_handler.n_dofs();
-    std::cout << "DoFs: " << n_dofs << std::endl;
-
-    VTUOutput<dim> output(offline_data.dof_handler, config.basename, offline_data);
-
-    std::cout << "\nTransferring data to device..." << std::endl;
-    MijMatrix<Number_cu> d_mass_matrix;
-    MiMatrix<Number_cu> d_lumped_mass;
-    MiMatrixInverse<Number_cu> d_lumped_mass_inv;
-    CijMatrix<dim, Number_cu> d_cij;
-    Sparsity d_sparsity;
-    BoundaryData<dim, Number_cu> d_boundary_data;
-    CouplingPairs d_coupling_pairs;
-    State<dim, Number_cu> d_U;
-    int nnz_mij, nnz_cij;
-    Number_cu measure_of_omega;
-
-    transfer_offline_data_to_gpu<dim, Number, Number_cu>(
-        offline_data, d_mass_matrix, d_lumped_mass,
-        d_lumped_mass_inv, d_cij, d_sparsity, nnz_mij, nnz_cij);
-    std::cout << "  Non-zeros in M_ij: " << nnz_mij << std::endl;
-    std::cout << "  Non-zeros in C_ij: " << nnz_cij << std::endl;
-
-    transfer_boundary_data_to_gpu<dim, Number, Number_cu>(
-        offline_data, d_boundary_data, d_coupling_pairs, measure_of_omega, n_dofs);
-    std::cout << "  Boundary DoFs: " << d_boundary_data.n_boundary_dofs << std::endl;
-    std::cout << "  Internal coupling pairs: " << d_coupling_pairs.n_internal_pairs << std::endl;
-    std::cout << "  Boundary coupling pairs: " << d_coupling_pairs.n_boundary_pairs << std::endl;
-
-    allocate_state(d_U, n_dofs);
-
-    std::vector<Number_cu> h_rho(n_dofs);
-    std::vector<Number_cu> h_momentum_x(n_dofs);
-    std::vector<Number_cu> h_momentum_y(n_dofs);
-    std::vector<Number_cu> h_momentum_z(n_dofs);
-    std::vector<Number_cu> h_energy(n_dofs);
-
-    std::cout << "rho: " << config.primitive_state[0] << std::endl;
-    std::cout << "u: " << config.primitive_state[1] << std::endl;
-    std::cout << "pressure: " << config.primitive_state[2] << std::endl;
-
-    const Number_cu vel_mag = static_cast<Number_cu>(config.primitive_state[1]);
-    const Number_cu p = static_cast<Number_cu>(config.primitive_state[2]);
-    const Number_cu rho = static_cast<Number_cu>(config.primitive_state[0]);
-    const Number_cu gamma = static_cast<Number_cu>(config.gamma);
-
-    const Number_cu u = vel_mag * static_cast<Number_cu>(config.direction[0]);
-    const Number_cu v = vel_mag * static_cast<Number_cu>(config.direction[1]);
-    const Number_cu w = vel_mag * static_cast<Number_cu>(config.direction[2]);
-
-    Number_cu kinetic_energy;
-    if constexpr (dim == 2) {
-        kinetic_energy = Number_cu(0.5) * rho * (u * u + v * v);
-    } else {
-        kinetic_energy = Number_cu(0.5) * rho * (u * u + v * v + w * w);
-    }
-    const Number_cu E = p / (gamma - Number_cu(1)) + kinetic_energy;
-
-    for (int i = 0; i < n_dofs; ++i) {
-        h_rho[i] = rho;
-        h_momentum_x[i] = rho * u;
-        h_momentum_y[i] = rho * v;
-        if constexpr (dim == 3)
-            h_momentum_z[i] = rho * w;
-        h_energy[i] = E;
-    }
-
-    CUDA_CHECK(cudaMemcpy(d_U.rho, h_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_momentum_x.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    if constexpr (dim >= 2) {
-        CUDA_CHECK(cudaMemcpy(d_U.momentum_y, h_momentum_y.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    }
-    if constexpr (dim == 3) {
-        CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_momentum_z.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-    }
-    CUDA_CHECK(cudaMemcpy(d_U.energy, h_energy.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
-
-    std::cout << "Initial conditions transferred" << std::endl;
-
-    const auto t0 = std::chrono::high_resolution_clock::now();
-    const std::time_t time_now = std::chrono::system_clock::to_time_t(t0);
-    std::cout << "\nStarting time loop, at time: " << std::ctime(&time_now);
-    Number_cu t;
-    if (config.time_scheme == "ssprk33") {
-        t = cuda_time_loop<dim, Number_cu, TimeScheme::SSPRK33_CN>(
-            d_mass_matrix, d_lumped_mass, d_lumped_mass_inv, d_cij,
-            d_sparsity, d_U, d_boundary_data, d_coupling_pairs,
-            measure_of_omega, n_dofs, nnz_mij, nnz_cij,
-            config, offline_data, &output);
-    } else {
-        t = cuda_time_loop<dim, Number_cu, TimeScheme::ERK33_CN>(
-            d_mass_matrix, d_lumped_mass, d_lumped_mass_inv, d_cij,
-            d_sparsity, d_U, d_boundary_data, d_coupling_pairs,
-            measure_of_omega, n_dofs, nnz_mij, nnz_cij,
-            config, offline_data, &output);
-    }
-
-    std::cout << "\nSimulation complete!" << std::endl;
-    std::cout << "Final time: " << t << std::endl;
-    const auto t1 = std::chrono::high_resolution_clock::now();
-    const auto duration = std::chrono::duration<double>(t1 - t0).count();
-    std::cout << "Comp. time (sec.): " << duration << std::endl;
-
-    free_state(d_U);
-    CUDA_CHECK(cudaFree(d_sparsity.row_offsets));
-    CUDA_CHECK(cudaFree(d_sparsity.col_indices));
-    CUDA_CHECK(cudaFree(d_mass_matrix.row_offsets));
-    CUDA_CHECK(cudaFree(d_mass_matrix.col_indices));
-    CUDA_CHECK(cudaFree(d_mass_matrix.values));
-    CUDA_CHECK(cudaFree(d_cij.row_offsets));
-    CUDA_CHECK(cudaFree(d_cij.col_indices));
-    CUDA_CHECK(cudaFree(d_cij.values));
-    CUDA_CHECK(cudaFree(d_lumped_mass.values));
-    CUDA_CHECK(cudaFree(d_lumped_mass_inv.values));
-    CUDA_CHECK(cudaFree(d_boundary_data.boundary_dofs));
-    CUDA_CHECK(cudaFree(d_boundary_data.boundary_ids));
-    CUDA_CHECK(cudaFree(d_boundary_data.boundary_normals));
-    CUDA_CHECK(cudaFree(d_boundary_data.bc_type));
-    CUDA_CHECK(cudaFree(d_boundary_data.bc_index));
-    if (d_coupling_pairs.n_internal_pairs > 0)
-        CUDA_CHECK(cudaFree(d_coupling_pairs.internal_pairs));
-    if (d_coupling_pairs.n_boundary_pairs > 0)
-        CUDA_CHECK(cudaFree(d_coupling_pairs.boundary_pairs));
-}
-
 int main(int argc, char* argv[]) {
     try {
-        std::cout << "Dragon2 Solver v1.0.0\n";
-        std::cout << "GPU-accelerated Navier-Stokes/Euler solver\n\n";
 
-        if (argc >= 2) {
-            std::string arg1 = argv[1];
-            if (arg1 == "--help" || arg1 == "-h") {
-                std::cout << "Usage: ./solver_ns <config.cfg>\n";
-                std::cout << "       ./solver_ns --help\n";
-                return 0;
+        Configuration config;
+
+        std::string param_file = "../ns-mach3-cylinder-2d.prm";
+        if (argc > 1) {
+            param_file = argv[1];
+        }
+        config.read_parameters(param_file);
+
+        std::cout << "=== GPU-accelerated Navier-Stokes solver ===" << std::endl;
+        std::cout << "CPU Precision: " << (sizeof(Number) == 4 ? "float" : "double") << std::endl;
+        std::cout << "GPU Precision: " << (sizeof(Number_cu) == 4 ? "float" : "double") << std::endl;
+        std::cout << "Dimension: " << dim << "D" << std::endl;
+        std::cout << "Data Structure: Structure of Arrays (SoA)" << std::endl;
+        std::cout << "Configuration:" << std::endl;
+        std::cout << "  Final time: " << config.final_time << std::endl;
+        std::cout << "  CFL min: " << config.cfl_min << std::endl;
+        std::cout << "  CFL max: " << config.cfl_max << std::endl;
+        std::cout << "  CFL number: " << config.cfl_number << std::endl;
+        std::cout << "  final_time = " << config.final_time << std::endl;
+        std::cout << "  timer_granularity = " << config.timer_granularity << std::endl;
+
+        dealii::Triangulation<dim> triangulation;
+        BoundaryMapping bc_mapping = parse_boundary_mapping(
+            config.boundary_mapping,
+            config.default_boundary_condition);
+        GmshMeshReader<dim>::read_mesh(
+            triangulation,
+            config.mesh_file_path,
+            bc_mapping);
+
+        std::cout << "Mesh: " << triangulation.n_active_cells() << " cells, "
+                  << triangulation.n_vertices() << " vertices" << std::endl;
+
+        OfflineData<dim> offline_data(triangulation);
+        const int n_dofs = offline_data.dof_handler.n_dofs();
+        std::cout << "DoFs: " << n_dofs << std::endl;
+
+        VTUOutput<dim> output(offline_data.dof_handler, config.basename, offline_data);
+
+        std::cout << "\nTransferring data to device..." << std::endl;
+        MijMatrix<Number_cu> d_mass_matrix;
+        MiMatrix<Number_cu> d_lumped_mass;
+        MiMatrixInverse<Number_cu> d_lumped_mass_inv;
+        CijMatrix<dim, Number_cu> d_cij;
+        Sparsity d_sparsity;
+        BoundaryData<dim, Number_cu> d_boundary_data;
+        CouplingPairs d_coupling_pairs;
+        State<dim, Number_cu> d_U;
+        int nnz_mij, nnz_cij;
+        Number_cu measure_of_omega;
+
+        transfer_offline_data_to_gpu<dim, Number, Number_cu>(
+            offline_data, d_mass_matrix, d_lumped_mass,
+            d_lumped_mass_inv, d_cij, d_sparsity, nnz_mij, nnz_cij);
+        std::cout << "  Non-zeros in M_ij: " << nnz_mij << std::endl;
+        std::cout << "  Non-zeros in C_ij: " << nnz_cij << std::endl;
+
+        transfer_boundary_data_to_gpu<dim, Number, Number_cu>(
+            offline_data, d_boundary_data, d_coupling_pairs, measure_of_omega, n_dofs);
+        std::cout << "  Boundary DoFs: " << d_boundary_data.n_boundary_dofs << std::endl;
+        std::cout << "  Internal coupling pairs: " << d_coupling_pairs.n_internal_pairs << std::endl;
+        std::cout << "  Boundary coupling pairs: " << d_coupling_pairs.n_boundary_pairs << std::endl;
+
+        allocate_state(d_U, n_dofs);
+
+        std::vector<Number_cu> h_rho(n_dofs);
+        std::vector<Number_cu> h_momentum_x(n_dofs);
+        std::vector<Number_cu> h_momentum_y(n_dofs);
+        std::vector<Number_cu> h_momentum_z(n_dofs);
+        std::vector<Number_cu> h_energy(n_dofs);
+
+        std::cout << "rho: " << config.primitive_state[0] << std::endl;
+        std::cout << "u: " << config.primitive_state[1] << std::endl;
+        std::cout << "pressure: " << config.primitive_state[2] << std::endl;
+
+        {
+            const Number_cu vel_mag = static_cast<Number_cu>(config.primitive_state[1]);
+            const Number_cu p = static_cast<Number_cu>(config.primitive_state[2]);
+            const Number_cu rho = static_cast<Number_cu>(config.primitive_state[0]);
+            const Number_cu gamma = static_cast<Number_cu>(config.gamma);
+
+            const Number_cu u = vel_mag * static_cast<Number_cu>(config.direction[0]);
+            const Number_cu v = vel_mag * static_cast<Number_cu>(config.direction[1]);
+            const Number_cu w = vel_mag * static_cast<Number_cu>(config.direction[2]);
+
+            Number_cu kinetic_energy;
+            if constexpr (dim == 2) {
+                kinetic_energy = Number_cu(0.5) * rho * (u * u + v * v);
+            } else {
+                kinetic_energy = Number_cu(0.5) * rho * (u * u + v * v + w * w);
+            }
+            const Number_cu E = p / (gamma - Number_cu(1)) + kinetic_energy;
+
+            for (int i = 0; i < n_dofs; ++i) {
+                h_rho[i] = rho;
+                h_momentum_x[i] = rho * u;
+                h_momentum_y[i] = rho * v;
+                if constexpr (dim == 3)
+                    h_momentum_z[i] = rho * w;
+                h_energy[i] = E;
             }
         }
 
-        std::string param_file;
-        if (argc > 1 && argv[1][0] != '-') {
-            param_file = argv[1];
-        } else {
-            std::cerr << "Usage: ./solver_ns <config.cfg>\n";
-            return 1;
+        CUDA_CHECK(cudaMemcpy(d_U.rho, h_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_momentum_x.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        if constexpr (dim >= 2) {
+            CUDA_CHECK(cudaMemcpy(d_U.momentum_y, h_momentum_y.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
         }
-
-        Configuration config;
-        config.read_parameters(param_file);
-
-        switch (config.dimension) {
-            case 2:
-                run_simulation<2>(config);
-                break;
-            case 3:
-                run_simulation<3>(config);
-                break;
-            default:
-                throw std::runtime_error("Unsupported dimension: " + std::to_string(config.dimension)
-                    + ". Only 2D and 3D are supported.");
+        if constexpr (dim == 3) {
+            CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_momentum_z.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
         }
+        CUDA_CHECK(cudaMemcpy(d_U.energy, h_energy.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+
+        std::cout << "Initial conditions transferred" << std::endl;
+
+        const auto t0 = std::chrono::high_resolution_clock::now();
+        const std::time_t time_now = std::chrono::system_clock::to_time_t(t0);
+        std::cout << "\nStarting time loop, at time: " << std::ctime(&time_now);
+        Number_cu t = cuda_time_loop<dim, Number_cu>(
+            d_mass_matrix,
+            d_lumped_mass,
+            d_lumped_mass_inv,
+            d_cij,
+            d_sparsity,
+            d_U,
+            d_boundary_data,
+            d_coupling_pairs,
+            measure_of_omega,
+            n_dofs,
+            nnz_mij,
+            nnz_cij,
+            config,
+            offline_data,
+            &output);
+
+        std::cout << "\nSimulation complete!" << std::endl;
+        std::cout << "Final time: " << t << std::endl;
+        const auto t1 = std::chrono::high_resolution_clock::now();
+        const auto duration = std::chrono::duration<double>(t1 - t0).count();
+        std::cout << "Comp. time (sec.): " << duration << std::endl;
+
+        free_state(d_U);
+        CUDA_CHECK(cudaFree(d_sparsity.row_offsets));
+        CUDA_CHECK(cudaFree(d_sparsity.col_indices));
+        CUDA_CHECK(cudaFree(d_mass_matrix.row_offsets));
+        CUDA_CHECK(cudaFree(d_mass_matrix.col_indices));
+        CUDA_CHECK(cudaFree(d_mass_matrix.values));
+        CUDA_CHECK(cudaFree(d_cij.row_offsets));
+        CUDA_CHECK(cudaFree(d_cij.col_indices));
+        CUDA_CHECK(cudaFree(d_cij.values));
+        CUDA_CHECK(cudaFree(d_lumped_mass.values));
+        CUDA_CHECK(cudaFree(d_lumped_mass_inv.values));
+        CUDA_CHECK(cudaFree(d_boundary_data.boundary_dofs));
+        CUDA_CHECK(cudaFree(d_boundary_data.boundary_ids));
+        CUDA_CHECK(cudaFree(d_boundary_data.boundary_normals));
+        CUDA_CHECK(cudaFree(d_boundary_data.bc_type));
+        CUDA_CHECK(cudaFree(d_boundary_data.bc_index));
+        if (d_coupling_pairs.n_internal_pairs > 0)
+            CUDA_CHECK(cudaFree(d_coupling_pairs.internal_pairs));
+        if (d_coupling_pairs.n_boundary_pairs > 0)
+            CUDA_CHECK(cudaFree(d_coupling_pairs.boundary_pairs));
 
     } catch (std::exception& e) {
             std::cerr << "Error: " << e.what() << std::endl;

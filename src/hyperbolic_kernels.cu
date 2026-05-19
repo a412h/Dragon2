@@ -11,7 +11,26 @@
 #include "limiter.cuh"
 #include "atomic_operations.cuh"
 
+template<int dim, typename Number>
+__global__ void compute_derived_quantities_kernel(
+    const State<dim, Number> d_U,
+    Number* d_pressure,
+    Number* d_speed_of_sound,
+    Number* d_precomputed,
+    int n_dofs)
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= n_dofs) return;
 
+    using PF = PhysicsFunctions<dim, Number>;
+
+    d_precomputed[tid * 2 + 0] = PF::specific_entropy(d_U, tid);
+    d_precomputed[tid * 2 + 1] = PF::harten_entropy(d_U, tid);
+
+    d_pressure[tid] = PF::pressure(d_U, tid);
+    const Number rho = d_U.rho[tid];
+    d_speed_of_sound[tid] = sqrt(PF::gamma * d_pressure[tid] / rho);
+}
 
 template<int dim, typename Number>
 __global__ void prepare_state_kernel(
@@ -108,6 +127,7 @@ __global__ void __launch_bounds__(256, 4) compute_off_diag_d_ij_and_alpha_i_kern
         if (j < i) continue;
 
         Number norm = PF::norm_dim(c_ij);
+        Number d_ij_val = Number(0);
         if (norm > Number(1e-14)) {
             Number n_ij[dim];
             #pragma unroll
@@ -115,9 +135,13 @@ __global__ void __launch_bounds__(256, 4) compute_off_diag_d_ij_and_alpha_i_kern
                 n_ij[k] = c_ij[k] / norm;
             }
             const Number lambda_max = riemann_solver.compute_local(U_i_local, U_j_local, n_ij);
-            dij_matrix[idx] = norm * lambda_max;
-        } else {
-            dij_matrix[idx] = Number(0);
+            d_ij_val = norm * lambda_max;
+        }
+        dij_matrix[idx] = d_ij_val;
+
+        const int idx_ji = __ldg(&sparsity.transpose_indices[idx]);
+        if (idx_ji >= 0) {
+            dij_matrix[idx_ji] = d_ij_val;
         }
     }
 
@@ -132,6 +156,7 @@ __global__ void complete_boundaries_kernel(
     Number* dij_matrix,
     const MijMatrix<Number>& mij_matrix,
     const CijMatrix<dim, Number>& cij_matrix,
+    const Sparsity& sparsity,
     const CouplingPairs& coupling_pairs)
 {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -187,11 +212,17 @@ __global__ void complete_boundaries_kernel(
             if constexpr (dim == 3) U_j_local[3] = U.momentum_z[j];
             U_j_local[dim + 1] = U.energy[j];
 
-            const int offset = mij_matrix.row_offsets[i] + col_idx;
-            const Number d_ij = dij_matrix[offset];
+            const int offset_ij = mij_matrix.row_offsets[i] + col_idx;
+            const Number d_ij = dij_matrix[offset_ij];
             const Number lambda_max = riemann_solver.compute_local(U_j_local, U_i_local, n_ji);
-            const Number d_ji = norm_ji * lambda_max;
-            dij_matrix[offset] = fmax(d_ij, d_ji);
+            const Number d_ji_computed = norm_ji * lambda_max;
+            const Number d_max = fmax(d_ij, d_ji_computed);
+            dij_matrix[offset_ij] = d_max;
+
+            const int offset_ji = sparsity.transpose_indices[offset_ij];
+            if (offset_ji >= 0) {
+                dij_matrix[offset_ji] = d_max;
+            }
         }
     }
 }
@@ -236,7 +267,9 @@ __global__ void compute_diagonal_and_tau_kernel(
                 d_sum -= dij_matrix[idx];
             }
 
-            d_sum = fmin(d_sum, Number(-1e-6));
+            constexpr Number safety = sizeof(Number) == 4 ? Number(-1.18e-32)
+                                                          : Number(-2.23e-302);
+            d_sum = fmin(d_sum, safety);
             dij_matrix[row_start] = d_sum;
 
             const Number mass = mi_matrix.values[tid];
@@ -244,58 +277,30 @@ __global__ void compute_diagonal_and_tau_kernel(
         }
     }
 
-    shared_tau[threadIdx.x] = local_tau;
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        local_tau = fmin(local_tau, __shfl_down_sync(0xFFFFFFFF, local_tau, offset));
+    }
+
+    const int lane = threadIdx.x & 31;
+    const int warp_id = threadIdx.x >> 5;
+    if (lane == 0) {
+        shared_tau[warp_id] = local_tau;
+    }
     __syncthreads();
 
-    if (threadIdx.x < 32) {
+    if (warp_id == 0) {
+        const int n_warps = (blockDim.x + 31) / 32;
+        local_tau = (lane < n_warps) ? shared_tau[lane] : Number(1e20);
         #pragma unroll
         for (int offset = 16; offset > 0; offset >>= 1) {
             local_tau = fmin(local_tau, __shfl_down_sync(0xFFFFFFFF, local_tau, offset));
         }
-        if (threadIdx.x == 0) {
-            shared_tau[threadIdx.x / 32] = local_tau;
+        if (lane == 0) {
+            atomicMinNumber(d_tau, local_tau);
         }
-    }
-    __syncthreads();
-
-    if (threadIdx.x == 0) {
-        local_tau = shared_tau[0];
-        for (int i = 1; i < (blockDim.x + 31) / 32; ++i) {
-            local_tau = fmin(local_tau, shared_tau[i]);
-        }
-        atomicMinNumber(d_tau, local_tau);
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 template<int dim, typename Number>
 __global__ void __launch_bounds__(128, 4) low_order_update_kernel(

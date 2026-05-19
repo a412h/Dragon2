@@ -107,18 +107,19 @@ struct ParabolicSolver {
 
     void compute_step_parabolic(State<dim, Number>& d_U_old,
                                 State<dim, Number>& d_U_new,
-                                Number tau);
+                                Number tau,
+                                bool crank_nicolson_extrapolation = false);
 };
 
 template<int dim, typename Number>
 void ParabolicSolver<dim, Number>::compute_step_parabolic(
     State<dim, Number>& d_U_old,
     State<dim, Number>& d_U_new,
-    Number tau)
+    Number tau,
+    bool crank_nicolson_extrapolation)
 {
     const int threads = 256;
     const int blocks = (n_dofs + threads - 1) / threads;
-
 
     build_velocity_rhs_kernel<dim, Number><<<blocks, threads, 0, stream>>>(
         d_U_old,
@@ -131,7 +132,7 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
         boundary_data,
         n_dofs);
 
-    Number lambda = -Number(2.0/3.0) * mu;
+    Number lambda = Number(0);
     velocity_solver.set_system_matrices(
         d_density,
         mi_matrix.values,
@@ -141,12 +142,20 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
         mass_matrix.values,
         mu,
         lambda);
+    velocity_solver.set_boundary_data(
+        boundary_data.bc_type,
+        boundary_data.bc_index,
+        boundary_data.boundary_normals);
+    velocity_solver.set_element_data(
+        element_connectivity->d_element_nodes,
+        element_connectivity->d_jacobian_data,
+        element_connectivity->n_elements);
 
     cudaMemcpyAsync(d_velocity_solution, d_velocity,
                     n_dofs * dim * sizeof(Number),
                     cudaMemcpyDeviceToDevice, stream);
 
-    Number tolerance = std::is_same_v<Number, float> ? Number(1e-5) : Number(1e-8);
+    Number tolerance = std::is_same_v<Number, float> ? Number(1e-6) : Number(1e-14);
     int iterations = velocity_solver.solve(
         d_velocity_solution,
         d_velocity_rhs,
@@ -158,22 +167,23 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
         printf("Warning: Velocity solver failed to converge\n");
     }
 
-
     cudaMemsetAsync(d_internal_energy_rhs, 0, n_dofs * sizeof(Number), stream);
 
-    const int element_blocks = (element_connectivity->n_elements + 127) / 128;
-    constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
-    constexpr size_t shared_mem_size = 128 * nodes_per_elem * dim * sizeof(Number);
-    compute_viscous_heating_kernel<dim, Number, nodes_per_elem><<<element_blocks, 128, shared_mem_size, stream>>>(
-        d_velocity_solution,
-        d_internal_energy_rhs,
-        element_connectivity->d_element_nodes,
-        element_connectivity->d_jacobian_data,
-        mi_matrix.values,
-        mu,
-        lambda,
-        element_connectivity->n_elements,
-        n_dofs);
+    if (mu != Number(0) || lambda != Number(0)) {
+        const int element_blocks = (element_connectivity->n_elements + 127) / 128;
+        constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
+        constexpr size_t shared_mem_size = 128 * nodes_per_elem * dim * sizeof(Number);
+        compute_viscous_heating_kernel<dim, Number, nodes_per_elem><<<element_blocks, 128, shared_mem_size, stream>>>(
+            d_velocity_solution,
+            d_internal_energy_rhs,
+            element_connectivity->d_element_nodes,
+            element_connectivity->d_jacobian_data,
+            mi_matrix.values,
+            mu,
+            lambda,
+            element_connectivity->n_elements,
+            n_dofs);
+    }
 
     complete_internal_energy_rhs_kernel<dim, Number><<<blocks, threads, 0, stream>>>(
         d_U_old,
@@ -186,9 +196,8 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
         mi_matrix.values,
         boundary_data,
         tau,
-        false,
+        crank_nicolson_extrapolation,
         n_dofs);
-
 
     energy_solver.set_system_matrices(
         d_density,
@@ -198,12 +207,17 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
         cij_matrix.values,
         mass_matrix.values,
         cv_inverse_kappa);
+    energy_solver.set_bc_type(boundary_data.bc_type);
+    energy_solver.set_element_data(
+        element_connectivity->d_element_nodes,
+        element_connectivity->d_jacobian_data,
+        element_connectivity->n_elements);
 
     cudaMemcpyAsync(d_internal_energy_solution, d_internal_energy,
                     n_dofs * sizeof(Number),
                     cudaMemcpyDeviceToDevice, stream);
 
-    Number tolerance_energy = std::is_same_v<Number, float> ? Number(1e-6) : Number(1e-10);
+    Number tolerance_energy = std::is_same_v<Number, float> ? Number(1e-6) : Number(1e-14);
     int energy_iterations = energy_solver.solve(
         d_internal_energy_solution,
         d_internal_energy_rhs,
@@ -215,15 +229,14 @@ void ParabolicSolver<dim, Number>::compute_step_parabolic(
         printf("Warning: Energy solver failed to converge\n");
     }
 
-
     copy_density_kernel<dim, Number><<<blocks, threads, 0, stream>>>(
         d_U_new, d_U_old, n_dofs);
 
     update_momentum_from_velocity_kernel<dim, Number><<<blocks, threads, 0, stream>>>(
-        d_U_new, d_U_old, d_velocity_solution, n_dofs);
+        d_U_new, d_U_old, d_velocity_solution, crank_nicolson_extrapolation, n_dofs);
 
     update_total_energy_from_internal_energy_kernel<dim, Number><<<blocks, threads, 0, stream>>>(
-        d_U_new, d_U_old, d_internal_energy_solution, n_dofs);
+        d_U_new, d_U_old, d_internal_energy_solution, crank_nicolson_extrapolation, n_dofs);
 }
 
 #endif

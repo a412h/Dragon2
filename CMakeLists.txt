@@ -43,16 +43,14 @@ set_target_properties(
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:
         -O3
-        --use_fast_math
         --threads 256
         --maxrregcount=64
         -Xptxas=-O3
-        -Xcompiler=-O3,-march=native,-ffast-math,-funroll-loops
+        -Xcompiler=-O3,-march=native,-funroll-loops
     >
     $<$<COMPILE_LANGUAGE:CXX>:
         -O3
         -march=native
-        -ffast-math
         -funroll-loops
         -fopenmp
     >
