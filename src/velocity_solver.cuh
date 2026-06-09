@@ -54,7 +54,8 @@ __global__ void apply_velocity_stress_kernel(
         for (int d = 0; d < dim; ++d)
             node_contrib[n][d] = Number(0);
 
-    if constexpr (dim == 2) {
+    if constexpr (dim == 2)
+    {
         constexpr int n_q_points = 4;
         constexpr int jac_data_per_quad = 8;
         const Number two_mu = Number(2) * mu;
@@ -132,8 +133,72 @@ __global__ void apply_velocity_stress_kernel(
                 }
             }
         }
-    } else {
+    }
+    else  // Dimension 3
+    {
+        constexpr int n_q_points = 8;
+        constexpr int jac_data_per_quad = 18;
+        const Number two_mu = Number(2) * mu;
+        const Number lambda_bar = lambda - Number(2.0/3.0) * mu;
+        constexpr double gp = 0.5773502691896258;
+        const Number qpts[8][3] = {
+            {Number(-gp),Number(-gp),Number(-gp)}, {Number( gp),Number(-gp),Number(-gp)},
+            {Number( gp),Number( gp),Number(-gp)}, {Number(-gp),Number( gp),Number(-gp)},
+            {Number(-gp),Number(-gp),Number( gp)}, {Number( gp),Number(-gp),Number( gp)},
+            {Number( gp),Number( gp),Number( gp)}, {Number(-gp),Number( gp),Number( gp)}
+        };
+        for (int q = 0; q < n_q_points; ++q) {
+            const Number xi = qpts[q][0], eta = qpts[q][1], zeta = qpts[q][2];
+            const int jac_offset = elem_id * n_q_points * jac_data_per_quad + q * jac_data_per_quad;
+            Number J_inv[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) J_inv[i][j] = jacobian_data[jac_offset + 9 + i * 3 + j];
+            const Number J00 = jacobian_data[jac_offset+0], J01 = jacobian_data[jac_offset+1], J02 = jacobian_data[jac_offset+2];
+            const Number J10 = jacobian_data[jac_offset+3], J11 = jacobian_data[jac_offset+4], J12 = jacobian_data[jac_offset+5];
+            const Number J20 = jacobian_data[jac_offset+6], J21 = jacobian_data[jac_offset+7], J22 = jacobian_data[jac_offset+8];
+            const Number det_J = J00*(J11*J22 - J12*J21) - J01*(J10*J22 - J12*J20) + J02*(J10*J21 - J11*J20);
+            const Number weight = Number(0.5) * fabs(det_J);
 
+            Number g[8][3];
+            g[0][0]=-Number(0.125)*(1-eta)*(1-zeta); g[0][1]=-Number(0.125)*(1-xi)*(1-zeta); g[0][2]=-Number(0.125)*(1-xi)*(1-eta);
+            g[1][0]= Number(0.125)*(1-eta)*(1-zeta); g[1][1]=-Number(0.125)*(1+xi)*(1-zeta); g[1][2]=-Number(0.125)*(1+xi)*(1-eta);
+            g[2][0]=-Number(0.125)*(1+eta)*(1-zeta); g[2][1]= Number(0.125)*(1-xi)*(1-zeta); g[2][2]=-Number(0.125)*(1-xi)*(1+eta);
+            g[3][0]= Number(0.125)*(1+eta)*(1-zeta); g[3][1]= Number(0.125)*(1+xi)*(1-zeta); g[3][2]=-Number(0.125)*(1+xi)*(1+eta);
+            g[4][0]=-Number(0.125)*(1-eta)*(1+zeta); g[4][1]=-Number(0.125)*(1-xi)*(1+zeta); g[4][2]= Number(0.125)*(1-xi)*(1-eta);
+            g[5][0]= Number(0.125)*(1-eta)*(1+zeta); g[5][1]=-Number(0.125)*(1+xi)*(1+zeta); g[5][2]= Number(0.125)*(1+xi)*(1-eta);
+            g[6][0]=-Number(0.125)*(1+eta)*(1+zeta); g[6][1]= Number(0.125)*(1-xi)*(1+zeta); g[6][2]= Number(0.125)*(1-xi)*(1+eta);
+            g[7][0]= Number(0.125)*(1+eta)*(1+zeta); g[7][1]= Number(0.125)*(1+xi)*(1+zeta); g[7][2]= Number(0.125)*(1+xi)*(1+eta);
+
+            Number grad_phi[8][3];
+            for (int n = 0; n < 8; ++n)
+                for (int i = 0; i < 3; ++i) {
+                    grad_phi[n][i] = Number(0);
+                    for (int j = 0; j < 3; ++j) grad_phi[n][i] += J_inv[j][i] * g[n][j];
+                }
+
+            Number grad_V[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
+            for (int n = 0; n < 8; ++n)
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j) grad_V[i][j] += V_elem[n][i] * grad_phi[n][j];
+
+            Number eps[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) eps[i][j] = Number(0.5) * (grad_V[i][j] + grad_V[j][i]);
+            const Number div_V = eps[0][0] + eps[1][1] + eps[2][2];
+
+            Number S[3][3];
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) S[i][j] = two_mu * eps[i][j];
+                S[i][i] += lambda_bar * div_V;
+            }
+
+            for (int n = 0; n < 8; ++n)
+                for (int i = 0; i < 3; ++i) {
+                    Number c = Number(0);
+                    for (int j = 0; j < 3; ++j) c += S[i][j] * grad_phi[n][j];
+                    node_contrib[n][i] += weight * c;
+                }
+        }
     }
 
     for (int n = 0; n < nodes_per_elem; ++n) {
