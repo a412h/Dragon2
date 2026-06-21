@@ -1,321 +1,97 @@
+
 #ifndef CELL_BASED_OPERATOR_CUH
 #define CELL_BASED_OPERATOR_CUH
 
 #include <cuda_runtime.h>
 #include <vector>
 #include <deal.II/fe/fe_values.h>
+#include <deal.II/fe/fe_tools.h>
 #include <deal.II/base/quadrature_lib.h>
+#include "fe_config.h"
 
-namespace QuadratureData {
 
-    __constant__ float c_quad_pts_2d[4][2] = {
-        {-0.57735026918962576451f, -0.57735026918962576451f},
-        { 0.57735026918962576451f, -0.57735026918962576451f},
-        { 0.57735026918962576451f,  0.57735026918962576451f},
-        {-0.57735026918962576451f,  0.57735026918962576451f}
-    };
-
-    __constant__ float c_quad_pts_3d[8][3] = {
-        {-0.57735026918962576451f, -0.57735026918962576451f, -0.57735026918962576451f},
-        { 0.57735026918962576451f, -0.57735026918962576451f, -0.57735026918962576451f},
-        { 0.57735026918962576451f,  0.57735026918962576451f, -0.57735026918962576451f},
-        {-0.57735026918962576451f,  0.57735026918962576451f, -0.57735026918962576451f},
-        {-0.57735026918962576451f, -0.57735026918962576451f,  0.57735026918962576451f},
-        { 0.57735026918962576451f, -0.57735026918962576451f,  0.57735026918962576451f},
-        { 0.57735026918962576451f,  0.57735026918962576451f,  0.57735026918962576451f},
-        {-0.57735026918962576451f,  0.57735026918962576451f,  0.57735026918962576451f}
-    };
-
-    __constant__ float c_gp = 0.57735026918962576451f;
-}
-
-template<int dim, typename Number, int nodes_per_elem = (dim == 2) ? 4 : 8>
-__global__ void compute_viscous_heating_kernel(
-    const Number* velocity,
-    Number* internal_energy_rhs,
-    const int* element_connectivity,
-    const Number* jacobian_data,
-    const Number* lumped_mass_matrix,
-    Number mu,
-    Number lambda,
-    int n_elements,
-    int n_nodes)
+template<int dim, typename Number, int degree>
+__global__ void compute_viscous_heating_kernel_sf(
+    const Number* __restrict__ velocity,
+    Number* __restrict__ internal_energy_rhs,
+    const int* __restrict__ conn,
+    const Number* __restrict__ geom,
+    const Number* __restrict__ Sv,
+    const Number* __restrict__ Sg,
+    Number mu, Number lambda, int n_elem)
 {
-    const int elem_id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (elem_id >= n_elements) return;
+    constexpr int P = degree + 1;
+    constexpr int NQ = (dim == 2) ? P * P : P * P * P;
+    constexpr int ND = NQ;
+    constexpr int GS = dim * dim + 1;
 
-    __shared__ Number s_vel_elem[128][nodes_per_elem][dim];
-    const int tid = threadIdx.x;
+    const int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= n_elem) return;
+    const Number lambda_bar = lambda - Number(2.0 / 3.0) * mu;
+    const Number two_mu = Number(2) * mu;
 
-    int nodes[nodes_per_elem];
-    #pragma unroll nodes_per_elem
-    for (int n = 0; n < nodes_per_elem; ++n) {
-        nodes[n] = element_connectivity[elem_id * nodes_per_elem + n];
+    int node[ND];
+    Number u[ND][dim];
+    for (int i = 0; i < ND; ++i) {
+        node[i] = conn[e * ND + i];
+        for (int c = 0; c < dim; ++c) u[i][c] = velocity[node[i] * dim + c];
     }
+    Number sv[P * P], sg[P * P];
+    for (int i = 0; i < P * P; ++i) { sv[i] = Sv[i]; sg[i] = Sg[i]; }
 
-    #if __CUDA_ARCH__ >= 350
-    #pragma unroll nodes_per_elem
-    for (int n = 0; n < nodes_per_elem; ++n) {
-        for (int d = 0; d < dim; ++d) {
-            __ldg(&velocity[nodes[n] * dim + d]);
+    auto stride = [](int ax) { return ax == 0 ? 1 : (ax == 1 ? P : P * P); };
+    auto contract = [&](const Number* M, int ax, bool tr, const Number* s, Number* d) {
+        const int st = stride(ax);
+        for (int o = 0; o < NQ; ++o) {
+            const int oax = (o / st) % P;
+            const int base = o - oax * st;
+            Number acc = Number(0);
+            for (int k = 0; k < P; ++k) { const Number m = tr ? M[k * P + oax] : M[oax * P + k]; acc += m * s[base + k * st]; }
+            d[o] = acc;
         }
-    }
-    #endif
+    };
+    Number bufA[NQ], bufB[NQ];
+    auto sweep = [&](const Number* src, int dir, bool tr, Number* res) {
+        const Number* s = src;
+        for (int ax = 0; ax < dim; ++ax) { Number* d = (ax % 2 == 0) ? bufA : bufB; contract((ax == dir) ? sg : sv, ax, tr, s, d); s = d; }
+        for (int i = 0; i < NQ; ++i) res[i] = s[i];
+    };
 
-    #pragma unroll nodes_per_elem
-    for (int n = 0; n < nodes_per_elem; ++n) {
-        #pragma unroll
-        for (int d = 0; d < dim; ++d) {
-            s_vel_elem[tid][n][d] = velocity[nodes[n] * dim + d];
-        }
-    }
-    __syncthreads();
-
-    Number (&vel_elem)[nodes_per_elem][dim] =
-        reinterpret_cast<Number(&)[nodes_per_elem][dim]>(s_vel_elem[tid]);
-
-    constexpr int n_q_points = (dim == 2) ? 4 : 8;
-    constexpr int jac_data_per_quad = (dim == 2) ? 8 : 18;
-
-    Number node_contributions[nodes_per_elem];
-    #pragma unroll nodes_per_elem
-    for (int n = 0; n < nodes_per_elem; ++n) {
-        node_contributions[n] = Number(0);
+    Number gref[dim][dim][NQ], ucomp[NQ];
+    for (int c = 0; c < dim; ++c) {
+        for (int i = 0; i < NQ; ++i) ucomp[i] = u[i][c];
+        for (int d = 0; d < dim; ++d) sweep(ucomp, d, false, gref[c][d]);
     }
 
-    if constexpr (dim == 2) {
-
-        const Number gp = Number(QuadratureData::c_gp);
-
-        #pragma unroll 4
-        for (int q = 0; q < 4; ++q) {
-            const Number xi = Number(QuadratureData::c_quad_pts_2d[q][0]);
-            const Number eta = Number(QuadratureData::c_quad_pts_2d[q][1]);
-
-            const int jac_offset = elem_id * n_q_points * jac_data_per_quad + q * jac_data_per_quad;
-            Number J_inv[2][2];
-            J_inv[0][0] = jacobian_data[jac_offset + 4];
-            J_inv[0][1] = jacobian_data[jac_offset + 5];
-            J_inv[1][0] = jacobian_data[jac_offset + 6];
-            J_inv[1][1] = jacobian_data[jac_offset + 7];
-
-            const Number J00 = jacobian_data[jac_offset + 0];
-            const Number J01 = jacobian_data[jac_offset + 1];
-            const Number J10 = jacobian_data[jac_offset + 2];
-            const Number J11 = jacobian_data[jac_offset + 3];
-            const Number det_J = J00 * J11 - J01 * J10;
-
-            Number phi[4];
-            phi[0] = Number(0.25) * (1 - xi) * (1 - eta);
-            phi[1] = Number(0.25) * (1 + xi) * (1 - eta);
-            phi[2] = Number(0.25) * (1 - xi) * (1 + eta);
-            phi[3] = Number(0.25) * (1 + xi) * (1 + eta);
-
-            Number grad_phi_ref[4][2];
-            grad_phi_ref[0][0] = -Number(0.25) * (1 - eta);
-            grad_phi_ref[0][1] = -Number(0.25) * (1 - xi);
-            grad_phi_ref[1][0] =  Number(0.25) * (1 - eta);
-            grad_phi_ref[1][1] = -Number(0.25) * (1 + xi);
-            grad_phi_ref[2][0] = -Number(0.25) * (1 + eta);
-            grad_phi_ref[2][1] =  Number(0.25) * (1 - xi);
-            grad_phi_ref[3][0] =  Number(0.25) * (1 + eta);
-            grad_phi_ref[3][1] =  Number(0.25) * (1 + xi);
-
-            Number grad_phi[4][2];
-            #pragma unroll 4
-            for (int n = 0; n < 4; ++n) {
-                #pragma unroll 2
-                for (int i = 0; i < 2; ++i) {
-                    grad_phi[n][i] = J_inv[0][i] * grad_phi_ref[n][0] +
-                                     J_inv[1][i] * grad_phi_ref[n][1];
-                }
+    Number hq[NQ];
+    for (int q = 0; q < NQ; ++q) {
+        const Number* Jinv = geom + (e * NQ + q) * GS;
+        const Number JxW = geom[(e * NQ + q) * GS + dim * dim];
+        Number gv[dim][dim];
+        for (int c = 0; c < dim; ++c)
+            for (int ee = 0; ee < dim; ++ee) {
+                Number s = Number(0);
+                for (int d = 0; d < dim; ++d) s += Jinv[d * dim + ee] * gref[c][d][q];
+                gv[c][ee] = s;
             }
-
-            Number grad_v[2][2] = {{0, 0}, {0, 0}};
-            #pragma unroll 4
-            for (int n = 0; n < 4; ++n) {
-                #pragma unroll 2
-                for (int i = 0; i < 2; ++i) {
-                    #pragma unroll 2
-                    for (int j = 0; j < 2; ++j) {
-                        grad_v[i][j] += vel_elem[n][i] * grad_phi[n][j];
-                    }
-                }
+        Number div = Number(0);
+        for (int i = 0; i < dim; ++i) div += gv[i][i];
+        Number heating = Number(0);
+        for (int i = 0; i < dim; ++i)
+            for (int j = 0; j < dim; ++j) {
+                const Number eps_ij = Number(0.5) * (gv[i][j] + gv[j][i]);
+                Number S_ij = two_mu * eps_ij;
+                if (i == j) S_ij += lambda_bar * div;
+                heating += eps_ij * S_ij;
             }
-
-            Number eps[2][2];
-            eps[0][0] = grad_v[0][0];
-            eps[0][1] = Number(0.5) * (grad_v[0][1] + grad_v[1][0]);
-            eps[1][0] = eps[0][1];
-            eps[1][1] = grad_v[1][1];
-
-            const Number div_v = eps[0][0] + eps[1][1];
-
-            const Number lambda_bar = lambda - Number(2.0/3.0) * mu;
-            const Number two_mu = Number(2) * mu;
-            Number S[2][2];
-            S[0][0] = two_mu * eps[0][0] + lambda_bar * div_v;
-            S[0][1] = two_mu * eps[0][1];
-            S[1][0] = S[0][1];
-            S[1][1] = two_mu * eps[1][1] + lambda_bar * div_v;
-
-            const Number heating_q = eps[0][0] * S[0][0] +
-                                    Number(2) * eps[0][1] * S[0][1] +
-                                    eps[1][1] * S[1][1];
-
-            const Number weight = abs(det_J);
-
-            #pragma unroll 4
-            for (int n = 0; n < 4; ++n) {
-                node_contributions[n] += weight * phi[n] * heating_q;
-            }
-        }
-    } else {
-
-        #pragma unroll 8
-        for (int q = 0; q < 8; ++q) {
-
-            const Number xi = Number(QuadratureData::c_quad_pts_3d[q][0]);
-            const Number eta = Number(QuadratureData::c_quad_pts_3d[q][1]);
-            const Number zeta = Number(QuadratureData::c_quad_pts_3d[q][2]);
-
-            const int jac_offset = elem_id * n_q_points * jac_data_per_quad + q * jac_data_per_quad;
-            Number J_inv[3][3];
-            #pragma unroll 3
-            for (int i = 0; i < 3; ++i) {
-                #pragma unroll 3
-                for (int j = 0; j < 3; ++j) {
-                    J_inv[i][j] = jacobian_data[jac_offset + 9 + i * 3 + j];
-                }
-            }
-
-            const Number J00 = jacobian_data[jac_offset + 0];
-            const Number J01 = jacobian_data[jac_offset + 1];
-            const Number J02 = jacobian_data[jac_offset + 2];
-            const Number J10 = jacobian_data[jac_offset + 3];
-            const Number J11 = jacobian_data[jac_offset + 4];
-            const Number J12 = jacobian_data[jac_offset + 5];
-            const Number J20 = jacobian_data[jac_offset + 6];
-            const Number J21 = jacobian_data[jac_offset + 7];
-            const Number J22 = jacobian_data[jac_offset + 8];
-            const Number det_J = J00 * (J11 * J22 - J12 * J21) -
-                                 J01 * (J10 * J22 - J12 * J20) +
-                                 J02 * (J10 * J21 - J11 * J20);
-
-            Number phi[8];
-            phi[0] = Number(0.125) * (1 - xi) * (1 - eta) * (1 - zeta);
-            phi[1] = Number(0.125) * (1 + xi) * (1 - eta) * (1 - zeta);
-            phi[2] = Number(0.125) * (1 - xi) * (1 + eta) * (1 - zeta);
-            phi[3] = Number(0.125) * (1 + xi) * (1 + eta) * (1 - zeta);
-            phi[4] = Number(0.125) * (1 - xi) * (1 - eta) * (1 + zeta);
-            phi[5] = Number(0.125) * (1 + xi) * (1 - eta) * (1 + zeta);
-            phi[6] = Number(0.125) * (1 - xi) * (1 + eta) * (1 + zeta);
-            phi[7] = Number(0.125) * (1 + xi) * (1 + eta) * (1 + zeta);
-
-            Number grad_phi_ref[8][3];
-            grad_phi_ref[0][0] = -Number(0.125) * (1 - eta) * (1 - zeta);
-            grad_phi_ref[0][1] = -Number(0.125) * (1 - xi) * (1 - zeta);
-            grad_phi_ref[0][2] = -Number(0.125) * (1 - xi) * (1 - eta);
-
-            grad_phi_ref[1][0] =  Number(0.125) * (1 - eta) * (1 - zeta);
-            grad_phi_ref[1][1] = -Number(0.125) * (1 + xi) * (1 - zeta);
-            grad_phi_ref[1][2] = -Number(0.125) * (1 + xi) * (1 - eta);
-
-            grad_phi_ref[2][0] = -Number(0.125) * (1 + eta) * (1 - zeta);
-            grad_phi_ref[2][1] =  Number(0.125) * (1 - xi) * (1 - zeta);
-            grad_phi_ref[2][2] = -Number(0.125) * (1 - xi) * (1 + eta);
-
-            grad_phi_ref[3][0] =  Number(0.125) * (1 + eta) * (1 - zeta);
-            grad_phi_ref[3][1] =  Number(0.125) * (1 + xi) * (1 - zeta);
-            grad_phi_ref[3][2] = -Number(0.125) * (1 + xi) * (1 + eta);
-
-            grad_phi_ref[4][0] = -Number(0.125) * (1 - eta) * (1 + zeta);
-            grad_phi_ref[4][1] = -Number(0.125) * (1 - xi) * (1 + zeta);
-            grad_phi_ref[4][2] =  Number(0.125) * (1 - xi) * (1 - eta);
-
-            grad_phi_ref[5][0] =  Number(0.125) * (1 - eta) * (1 + zeta);
-            grad_phi_ref[5][1] = -Number(0.125) * (1 + xi) * (1 + zeta);
-            grad_phi_ref[5][2] =  Number(0.125) * (1 + xi) * (1 - eta);
-
-            grad_phi_ref[6][0] = -Number(0.125) * (1 + eta) * (1 + zeta);
-            grad_phi_ref[6][1] =  Number(0.125) * (1 - xi) * (1 + zeta);
-            grad_phi_ref[6][2] =  Number(0.125) * (1 - xi) * (1 + eta);
-
-            grad_phi_ref[7][0] =  Number(0.125) * (1 + eta) * (1 + zeta);
-            grad_phi_ref[7][1] =  Number(0.125) * (1 + xi) * (1 + zeta);
-            grad_phi_ref[7][2] =  Number(0.125) * (1 + xi) * (1 + eta);
-
-            Number grad_phi[8][3];
-            #pragma unroll 8
-            for (int n = 0; n < 8; ++n) {
-                #pragma unroll 3
-                for (int i = 0; i < 3; ++i) {
-                    grad_phi[n][i] = 0;
-                    #pragma unroll 3
-                    for (int j = 0; j < 3; ++j) {
-                        grad_phi[n][i] += J_inv[j][i] * grad_phi_ref[n][j];
-                    }
-                }
-            }
-
-            Number grad_v[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
-            #pragma unroll 8
-            for (int n = 0; n < 8; ++n) {
-                #pragma unroll 3
-                for (int i = 0; i < 3; ++i) {
-                    #pragma unroll 3
-                    for (int j = 0; j < 3; ++j) {
-                        grad_v[i][j] += vel_elem[n][i] * grad_phi[n][j];
-                    }
-                }
-            }
-
-            Number eps[3][3];
-            #pragma unroll 3
-            for (int i = 0; i < 3; ++i) {
-                #pragma unroll 3
-                for (int j = 0; j < 3; ++j) {
-                    eps[i][j] = Number(0.5) * (grad_v[i][j] + grad_v[j][i]);
-                }
-            }
-
-            const Number div_v = eps[0][0] + eps[1][1] + eps[2][2];
-
-            const Number lambda_bar = lambda - Number(2.0/3.0) * mu;
-            const Number two_mu = Number(2) * mu;
-            Number S[3][3];
-            #pragma unroll 3
-            for (int i = 0; i < 3; ++i) {
-                #pragma unroll 3
-                for (int j = 0; j < 3; ++j) {
-                    S[i][j] = two_mu * eps[i][j];
-                }
-                S[i][i] += lambda_bar * div_v;
-            }
-
-            Number heating_q = 0;
-            #pragma unroll 3
-            for (int i = 0; i < 3; ++i) {
-                #pragma unroll 3
-                for (int j = 0; j < 3; ++j) {
-                    heating_q += eps[i][j] * S[i][j];
-                }
-            }
-
-            const Number weight = abs(det_J);
-
-            #pragma unroll 8
-            for (int n = 0; n < 8; ++n) {
-                node_contributions[n] += weight * phi[n] * heating_q;
-            }
-        }
+        hq[q] = heating * JxW;
     }
 
-    #pragma unroll nodes_per_elem
-    for (int n = 0; n < nodes_per_elem; ++n) {
-        atomicAdd(&internal_energy_rhs[nodes[n]], node_contributions[n]);
-    }
+    Number nc[ND];
+    sweep(hq, -1, true, nc);
+    for (int n = 0; n < ND; ++n) atomicAdd(&internal_energy_rhs[node[n]], nc[n]);
 }
+
 
 template<int dim, typename Number>
 class ElementConnectivity {
@@ -325,112 +101,97 @@ public:
     int n_elements;
     int n_nodes;
 
-    ElementConnectivity()
-        : d_element_nodes(nullptr), d_jacobian_data(nullptr),
+    ElementConnectivity() 
+        : d_element_nodes(nullptr), d_jacobian_data(nullptr), 
           n_elements(0), n_nodes(0) {
     }
-
+    
     ~ElementConnectivity() {
         if (d_element_nodes != nullptr) cudaFree(d_element_nodes);
         if (d_jacobian_data != nullptr) cudaFree(d_jacobian_data);
     }
-
+    
     void build_from_triangulation(const OfflineData<dim, double>& offline_data) {
         n_nodes = offline_data.dof_handler.n_dofs();
         n_elements = offline_data.dof_handler.get_triangulation().n_active_cells();
-
+        
         std::cout << "  Building element connectivity from triangulation..." << std::endl;
         std::cout << "    Nodes: " << n_nodes << std::endl;
         std::cout << "    Elements: " << n_elements << std::endl;
-
-        constexpr int nodes_per_elem = (dim == 2) ? 4 : 8;
-
-        constexpr int n_q_points = (dim == 2) ? 4 : 8;
-        constexpr int jac_data_per_quad = (dim == 2) ? 8 : 18;
+        
+        constexpr int P = fe_degree + 1;
+        constexpr int nodes_per_elem = (dim == 2) ? P * P : P * P * P;  
+        constexpr int n_q_points     = nodes_per_elem;                 
+        constexpr int jac_data_per_quad = dim * dim + 1;               
         constexpr int jac_data_per_elem = n_q_points * jac_data_per_quad;
-
+        
         std::vector<int> h_connectivity(n_elements * nodes_per_elem);
         std::vector<Number> h_jacobians(n_elements * jac_data_per_elem);
 
-        dealii::QGauss<dim> quadrature(2);
+        dealii::QGauss<dim> quadrature(fe_degree + 1);
         dealii::FEValues<dim> fe_values(
             offline_data.finite_element,
             quadrature,
-            dealii::update_jacobians | dealii::update_inverse_jacobians);
+            dealii::update_inverse_jacobians | dealii::update_JxW_values);
 
+        const std::vector<unsigned int> h2l =
+            dealii::FETools::hierarchic_to_lexicographic_numbering<dim>(fe_degree);
+        
         const unsigned int dofs_per_cell = offline_data.finite_element.dofs_per_cell;
         std::vector<dealii::types::global_dof_index> local_dof_indices(dofs_per_cell);
-
+        
         std::cout << "    DoFs per cell: " << dofs_per_cell << std::endl;
-
+        
         if (dofs_per_cell != nodes_per_elem) {
-            std::cerr << "ERROR: Element has " << dofs_per_cell
+            std::cerr << "ERROR: Element has " << dofs_per_cell 
                       << " DoFs but expected " << nodes_per_elem << std::endl;
             throw std::runtime_error("Mismatch in element DoF count");
         }
-
+        
         int elem_id = 0;
         for (const auto& cell : offline_data.dof_handler.active_cell_iterators()) {
 
             cell->get_dof_indices(local_dof_indices);
 
-            for (unsigned int i = 0; i < nodes_per_elem; ++i) {
-                const unsigned int orig = local_dof_indices[i];
-                const unsigned int master = offline_data.periodic_master[orig];
-                h_connectivity[elem_id * nodes_per_elem + i] = master;
+            for (unsigned int h = 0; h < static_cast<unsigned>(nodes_per_elem); ++h) {
+                const unsigned int master = offline_data.periodic_master[local_dof_indices[h]];
+                h_connectivity[elem_id * nodes_per_elem + h2l[h]] = master;  
             }
 
             fe_values.reinit(cell);
-            for (unsigned int q = 0; q < quadrature.size(); ++q) {
-                const auto& J = fe_values.jacobian(q);
-                const auto& J_inv = fe_values.inverse_jacobian(q);
-
-                if constexpr (dim == 2) {
-                    const int offset = elem_id * jac_data_per_elem + q * jac_data_per_quad;
-                    h_jacobians[offset + 0] = static_cast<Number>(J[0][0]);
-                    h_jacobians[offset + 1] = static_cast<Number>(J[0][1]);
-                    h_jacobians[offset + 2] = static_cast<Number>(J[1][0]);
-                    h_jacobians[offset + 3] = static_cast<Number>(J[1][1]);
-
-                    h_jacobians[offset + 4] = static_cast<Number>(J_inv[0][0]);
-                    h_jacobians[offset + 5] = static_cast<Number>(J_inv[0][1]);
-                    h_jacobians[offset + 6] = static_cast<Number>(J_inv[1][0]);
-                    h_jacobians[offset + 7] = static_cast<Number>(J_inv[1][1]);
-                } else {
-                    const int offset = elem_id * jac_data_per_elem + q * jac_data_per_quad;
-                    for (int i = 0; i < 3; ++i) {
-                        for (int j = 0; j < 3; ++j) {
-                            h_jacobians[offset + i * 3 + j] = static_cast<Number>(J[i][j]);
-                            h_jacobians[offset + 9 + i * 3 + j] = static_cast<Number>(J_inv[i][j]);
-                        }
-                    }
-                }
+            for (unsigned int q = 0; q < static_cast<unsigned>(n_q_points); ++q) {
+                const auto& J_inv = fe_values.inverse_jacobian(q);  
+                const int offset = elem_id * jac_data_per_elem + q * jac_data_per_quad;
+                for (int i = 0; i < dim; ++i)
+                    for (int j = 0; j < dim; ++j)
+                        h_jacobians[offset + i * dim + j] = static_cast<Number>(J_inv[i][j]);
+                h_jacobians[offset + dim * dim] = static_cast<Number>(fe_values.JxW(q));
             }
-
+            
             elem_id++;
         }
-
+        
         std::cout << "    Processed " << elem_id << " elements" << std::endl;
 
         cudaError_t err1 = cudaMalloc(&d_element_nodes, h_connectivity.size() * sizeof(int));
         cudaError_t err2 = cudaMalloc(&d_jacobian_data, h_jacobians.size() * sizeof(Number));
-
+        
         if (err1 != cudaSuccess || err2 != cudaSuccess) {
             std::cerr << "ERROR: CUDA malloc failed!" << std::endl;
             std::cerr << "  Element nodes: " << cudaGetErrorString(err1) << std::endl;
             std::cerr << "  Jacobian data: " << cudaGetErrorString(err2) << std::endl;
             throw std::runtime_error("CUDA allocation failure");
         }
-
+        
         std::cout << "    Allocated GPU memory" << std::endl;
         std::cout << "      Element nodes: " << h_connectivity.size() * sizeof(int) << " bytes" << std::endl;
         std::cout << "      Jacobian data: " << h_jacobians.size() * sizeof(Number) << " bytes" << std::endl;
-
+        
         cudaMemcpy(d_element_nodes, h_connectivity.data(),
                    h_connectivity.size() * sizeof(int), cudaMemcpyHostToDevice);
         cudaMemcpy(d_jacobian_data, h_jacobians.data(),
                    h_jacobians.size() * sizeof(Number), cudaMemcpyHostToDevice);
-
+        
         std::cout << "    Element connectivity transferred to GPU successfully" << std::endl;
     }
 };

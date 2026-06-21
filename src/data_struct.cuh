@@ -1,3 +1,5 @@
+
+
 #ifndef DATA_STRUCT_CUH
 #define DATA_STRUCT_CUH
 
@@ -9,28 +11,31 @@
 #include "output.h"
 #include "offline_data.h"
 
+
 #define CUDA_CHECK(call) { cudaError_t error = call; if (error != cudaSuccess) { fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); exit(1);} }
+
 
 template<int dim, typename Number>
 struct State {
-    Number* rho;
-    Number* momentum_x;
-    Number* momentum_y;
-    Number* momentum_z;
-    Number* energy;
+    Number* rho;           
+    Number* momentum_x;    
+    Number* momentum_y;    
+    Number* momentum_z;    
+    Number* energy;        
 
     __device__ __host__ Number* momentum(int d) {
         if (d == 0) return momentum_x;
         else if (d == 1) return momentum_y;
         else return momentum_z;
     }
-
+    
     __device__ __host__ const Number* momentum(int d) const {
         if (d == 0) return momentum_x;
         else if (d == 1) return momentum_y;
         else return momentum_z;
     }
 };
+
 
 template<int dim, typename Number>
 struct Flux {
@@ -40,12 +45,14 @@ struct Flux {
     __host__ __device__ const Number& operator()(int component, int dimension) const;
 };
 
+
 template<int dim, typename Number>
 struct Momentum {
     Number data[dim];
     __device__ Number& operator[](int i) { return data[i]; }
     __device__ const Number& operator[](int i) const { return data[i]; }
 };
+
 
 template<typename Number>
 struct MijMatrix {
@@ -74,13 +81,15 @@ struct CijMatrix {
 template<int dim, typename Number>
 struct BoundaryData {
 
-    int* boundary_dofs;
-    int* boundary_ids;
-    Number* boundary_normals;
-    int n_boundary_dofs;
+    int* boundary_dofs;       
+    int* boundary_ids;        
+    Number* boundary_normals; 
+    int n_boundary_dofs;      
 
     int* bc_type;
-    int* bc_index;
+    int* bc_index;  
+
+    Number* dof_positions_x;
 };
 
 struct CouplingPairs {
@@ -96,14 +105,15 @@ struct Sparsity {
     int* transpose_indices;
 };
 
+
 template<int dim, typename Number>
 struct Pij {
-    Number* p_rho;
-    Number* p_momentum_x;
-    Number* p_momentum_y;
-    Number* p_momentum_z;
-    Number* p_energy;
-
+    Number* p_rho;           
+    Number* p_momentum_x;    
+    Number* p_momentum_y;    
+    Number* p_momentum_z;    
+    Number* p_energy;        
+    
     __device__ __host__ Number* p_momentum(int d) {
         if (d == 0) return p_momentum_x;
         else if (d == 1) return p_momentum_y;
@@ -113,18 +123,19 @@ struct Pij {
 
 template<int dim, typename Number>
 struct Ri {
-    Number* r_rho;
-    Number* r_momentum_x;
-    Number* r_momentum_y;
-    Number* r_momentum_z;
-    Number* r_energy;
-
+    Number* r_rho;           
+    Number* r_momentum_x;    
+    Number* r_momentum_y;    
+    Number* r_momentum_z;    
+    Number* r_energy;        
+    
     __device__ __host__ Number* r_momentum(int d) {
         if (d == 0) return r_momentum_x;
         else if (d == 1) return r_momentum_y;
         else return r_momentum_z;
     }
 };
+
 
 template<int dim, typename Number>
 struct ERK33Params {
@@ -172,6 +183,8 @@ struct PrimitiveType {
     Number data[riemann_data_size];
 };
 
+
+
 template<int dim, typename Number>
 __host__ __device__ Number& Flux<dim, Number>::operator()(int component, int dimension) {
     return F[component * dim + dimension];
@@ -181,6 +194,9 @@ template<int dim, typename Number>
 __host__ __device__ const Number& Flux<dim, Number>::operator()(int component, int dimension) const {
     return F[component * dim + dimension];
 }
+
+
+
 
 template<int dim, typename Number>
 void allocate_state(State<dim, Number>& state, int n_dofs) {
@@ -259,6 +275,7 @@ void free_ri(Ri<dim, Number>& ri) {
     }
     CUDA_CHECK(cudaFree(ri.r_energy));
 }
+
 
 template<int dim, typename Number_cu>
 Number_cu cuda_time_loop(

@@ -1,0 +1,36 @@
+# Navier-Stokes Mach 25 flow for NASA capsule atmospheric reentry
+
+subsection A - TimeLoop
+    set basename            = ns-mach25-capsule-3d
+    set final time          = 100.0
+    set timer granularity   = 1.0
+end
+
+subsection B - Equation
+    set dimension       = 3
+    set equation        = euler
+    set gamma           = 1.4
+    set mu              = 0
+end
+
+subsection C - Discretization
+    set geometry        = capsule
+    set mesh refinement = 3
+
+    subsection capsule
+        set sphere diameter multiplier = 5.0
+    end
+end
+
+subsection E - InitialValues
+    set direction     = -1, 0, 0
+
+    subsection uniform
+        set primitive state = 1.4, 8.0, 1
+    end
+end
+
+subsection H - TimeIntegrator
+    set cfl min               = 0.9
+    set cfl max               = 0.9
+end

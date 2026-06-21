@@ -1,3 +1,4 @@
+
 #include <cuda_runtime.h>
 #include <iostream>
 #include <iomanip>
@@ -14,6 +15,9 @@
 #include "boundary_conditions.cuh"
 #include "offline_data.h"
 #include "parabolic_solver.cuh"
+#include "becker_solution.h"
+
+
 
 template<int dim, typename Number>
 __global__ void apply_periodic_constraints_kernel(
@@ -33,6 +37,7 @@ __global__ void apply_periodic_constraints_kernel(
     U.energy[s]     = U.energy[m];
 }
 
+
 void compute_transpose_indices(
     int* d_transpose_indices,
     const int* d_row_offsets,
@@ -43,8 +48,8 @@ void compute_transpose_indices(
 
     std::vector<int> h_row_offsets(n_dofs + 1);
     std::vector<int> h_col_indices(nnz);
-    std::vector<int> h_transpose_indices(nnz, -1);
-
+    std::vector<int> h_transpose_indices(nnz, -1);  
+    
     CUDA_CHECK(cudaMemcpy(h_row_offsets.data(), d_row_offsets,
                           (n_dofs + 1) * sizeof(int), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_col_indices.data(), d_col_indices,
@@ -59,7 +64,7 @@ void compute_transpose_indices(
 
             const int row_start_j = h_row_offsets[j];
             const int row_end_j = h_row_offsets[j + 1];
-
+            
             for (int idx_j = row_start_j + 1; idx_j < row_end_j; ++idx_j) {
                 if (h_col_indices[idx_j] == i) {
                     h_transpose_indices[idx] = idx_j;
@@ -73,24 +78,26 @@ void compute_transpose_indices(
                           nnz * sizeof(int), cudaMemcpyHostToDevice));
 }
 
+
 template<int dim, typename Number>
-void copy_state(State<dim, Number>& dst, const State<dim, Number>& src,
+void copy_state(State<dim, Number>& dst, const State<dim, Number>& src, 
                 int n_dofs, cudaStream_t stream) {
-    CUDA_CHECK(cudaMemcpyAsync(dst.rho, src.rho, n_dofs * sizeof(Number),
+    CUDA_CHECK(cudaMemcpyAsync(dst.rho, src.rho, n_dofs * sizeof(Number), 
                                cudaMemcpyDeviceToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(dst.momentum_x, src.momentum_x, n_dofs * sizeof(Number),
+    CUDA_CHECK(cudaMemcpyAsync(dst.momentum_x, src.momentum_x, n_dofs * sizeof(Number), 
                                cudaMemcpyDeviceToDevice, stream));
     if constexpr (dim >= 2) {
-        CUDA_CHECK(cudaMemcpyAsync(dst.momentum_y, src.momentum_y, n_dofs * sizeof(Number),
+        CUDA_CHECK(cudaMemcpyAsync(dst.momentum_y, src.momentum_y, n_dofs * sizeof(Number), 
                                    cudaMemcpyDeviceToDevice, stream));
     }
     if constexpr (dim == 3) {
-        CUDA_CHECK(cudaMemcpyAsync(dst.momentum_z, src.momentum_z, n_dofs * sizeof(Number),
+        CUDA_CHECK(cudaMemcpyAsync(dst.momentum_z, src.momentum_z, n_dofs * sizeof(Number), 
                                    cudaMemcpyDeviceToDevice, stream));
     }
-    CUDA_CHECK(cudaMemcpyAsync(dst.energy, src.energy, n_dofs * sizeof(Number),
+    CUDA_CHECK(cudaMemcpyAsync(dst.energy, src.energy, n_dofs * sizeof(Number), 
                                cudaMemcpyDeviceToDevice, stream));
 }
+
 
 template<int dim, typename Number>
 class StageExecutor {
@@ -136,21 +143,27 @@ private:
     const Number cv_inverse_kappa;
     const bool is_navier_stokes;
 
+    bool becker_enabled;
+    BeckerParams becker_params;
+    Number* dof_positions_x;  
+
+    double* d_becker_v_cache = nullptr;
+
     int* d_slave_idx_local;
     int* d_master_idx_local;
     int n_periodic_pairs;
 
-    cudaStream_t stream;
+    cudaStream_t stream;  
     const OfflineData<dim, double>& offline_data;
 
-    ParabolicSolver<dim, Number> parabolic_solver;
+    ParabolicSolver<dim, Number> parabolic_solver;  
 
     struct KernelConfig {
         int threadsPerBlock;
         int sharedMemorySize;
         int blocksPerGrid;
     };
-
+    
     KernelConfig prepareConfig;
     KernelConfig viscosityConfig;
     KernelConfig lowOrderConfig;
@@ -196,6 +209,9 @@ public:
         Number _mu,
         Number _cv_inverse_kappa,
         bool _is_navier_stokes,
+        bool _becker_enabled,
+        BeckerParams _becker_params,
+        Number* _dof_positions_x,
         int* _d_slave_idx,
         int* _d_master_idx,
         int _n_periodic_pairs,
@@ -215,6 +231,9 @@ public:
           n_dofs(_n_dofs), nnz(_nnz),
           mu(_mu), cv_inverse_kappa(_cv_inverse_kappa),
           is_navier_stokes(_is_navier_stokes),
+          becker_enabled(_becker_enabled),
+          becker_params(_becker_params),
+          dof_positions_x(_dof_positions_x),
           d_slave_idx_local(_d_slave_idx),
           d_master_idx_local(_d_master_idx),
           n_periodic_pairs(_n_periodic_pairs),
@@ -224,6 +243,11 @@ public:
     {
         CUDA_CHECK(cudaMalloc(&d_tau, sizeof(Number)));
 
+        if (becker_enabled) {
+            CUDA_CHECK(cudaMalloc(&d_becker_v_cache, n_dofs * sizeof(double)));
+            CUDA_CHECK(cudaMemset(d_becker_v_cache, 0, n_dofs * sizeof(double)));
+        }
+
         parabolic_solver.set_element_connectivity(offline_data);
 
         std::vector<Number> h_init_rho(n_dofs, inflow_rho);
@@ -231,44 +255,49 @@ public:
         std::vector<Number> h_init_my(n_dofs, inflow_momentum_y);
         std::vector<Number> h_init_mz(n_dofs, inflow_momentum_z);
         std::vector<Number> h_init_e(n_dofs, inflow_energy);
-
-        CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.rho, h_init_rho.data(),
+        
+        CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.rho, h_init_rho.data(), 
                              n_dofs * sizeof(Number), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.momentum_x, h_init_mx.data(),
+        CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.momentum_x, h_init_mx.data(), 
                              n_dofs * sizeof(Number), cudaMemcpyHostToDevice));
         if constexpr (dim >= 2) {
-            CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.momentum_y, h_init_my.data(),
+            CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.momentum_y, h_init_my.data(), 
                                  n_dofs * sizeof(Number), cudaMemcpyHostToDevice));
         }
         if constexpr (dim == 3) {
-            CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.momentum_z, h_init_mz.data(),
+            CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.momentum_z, h_init_mz.data(), 
                                  n_dofs * sizeof(Number), cudaMemcpyHostToDevice));
         }
         CUDA_CHECK(cudaMemcpy(parabolic_solver.init_U.energy, h_init_e.data(),
                              n_dofs * sizeof(Number), cudaMemcpyHostToDevice));
+
+        if (becker_enabled) {
+            copy_state(parabolic_solver.init_U, d_U, n_dofs, stream);
+            CUDA_CHECK(cudaStreamSynchronize(stream));
+        }
 
         parabolic_solver.set_matrices(d_mij, d_mi, d_cij, d_boundary_data);
 
         prepareConfig.threadsPerBlock = 256;
         prepareConfig.sharedMemorySize = 0;
         prepareConfig.blocksPerGrid = (n_dofs + prepareConfig.threadsPerBlock - 1) / prepareConfig.threadsPerBlock;
-
+        
         viscosityConfig.threadsPerBlock = 256;
         viscosityConfig.sharedMemorySize = 0;
         viscosityConfig.blocksPerGrid = (n_dofs + viscosityConfig.threadsPerBlock - 1) / viscosityConfig.threadsPerBlock;
-
+        
         lowOrderConfig.threadsPerBlock = 128;
         lowOrderConfig.sharedMemorySize = 0;
         lowOrderConfig.blocksPerGrid = (n_dofs + lowOrderConfig.threadsPerBlock - 1) / lowOrderConfig.threadsPerBlock;
-
+        
         limiterConfig.threadsPerBlock = 192;
         limiterConfig.sharedMemorySize = 0;
         limiterConfig.blocksPerGrid = (n_dofs + limiterConfig.threadsPerBlock - 1) / limiterConfig.threadsPerBlock;
-
+        
         highOrderConfig.threadsPerBlock = 256;
         highOrderConfig.sharedMemorySize = 0;
         highOrderConfig.blocksPerGrid = (n_dofs + highOrderConfig.threadsPerBlock - 1) / highOrderConfig.threadsPerBlock;
-
+        
         diagonalConfig.threadsPerBlock = 256;
         diagonalConfig.sharedMemorySize = diagonalConfig.threadsPerBlock * sizeof(Number);
         diagonalConfig.blocksPerGrid = (n_dofs + diagonalConfig.threadsPerBlock - 1) / diagonalConfig.threadsPerBlock;
@@ -277,7 +306,7 @@ public:
         cudaGetDevice(&device);
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, device);
-
+        
         std::cout << "\nGPU Configuration:" << std::endl;
         std::cout << "  Device: " << prop.name << std::endl;
         std::cout << "  SMs: " << prop.multiProcessorCount << std::endl;
@@ -294,11 +323,14 @@ public:
             d_sparsity.row_offsets,
             d_sparsity.col_indices,
             n_dofs, nnz);
-        std::cout << "  Transpose indices computed" << std::endl;
+        std::cout << "  Transpose indices computed" << std::endl;    
     }
-
+    
     ~StageExecutor() {
         CUDA_CHECK(cudaFree(d_tau));
+        if (d_becker_v_cache != nullptr) {
+            CUDA_CHECK(cudaFree(d_becker_v_cache));
+        }
     }
 
     static constexpr Number w_0 = Number(0);
@@ -311,11 +343,19 @@ public:
     static constexpr Number w_0d25 = Number(0.25);
     static constexpr Number w_0d66 = Number(2.0 / 3.0);
     static constexpr Number w_0d33 = Number(1.0 / 3.0);
-    static constexpr Number efficiency_euler = Number(3.0);
-    static constexpr Number efficiency_ns = Number(6.0);
+    static constexpr Number efficiency_euler = Number(3.0);   
+    static constexpr Number efficiency_ns = Number(6.0);      
     static constexpr State<dim, Number> null_v_w = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
-    Number current_time = Number(0);
+    Number current_time = Number(0);  
+
+    void apply_becker_bc(State<dim, Number>& state, Number t) {
+        if (!becker_enabled) return;
+        const int blocks = (n_dofs + 255) / 256;
+        apply_becker_dirichlet_kernel<dim, Number><<<blocks, 256, 0, stream>>>(
+            state, d_boundary_data.bc_type, dof_positions_x,
+            becker_params, t, n_dofs, d_becker_v_cache);
+    }
 
     Number execute_timestep(Number tau_max) {
         if (is_navier_stokes) {
@@ -412,37 +452,30 @@ private:
 
         const int n_entries = d_boundary_data.n_boundary_dofs;
         if (n_entries > 0) {
-            const int blocks_entries = (n_entries + 255) / 256;
+            if (becker_enabled) {
 
-            apply_dirichlet_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
-                state_vector,
-                d_boundary_data.boundary_dofs,
-                d_boundary_data.boundary_ids,
-                n_entries,
-                inflow_rho, inflow_momentum_x, inflow_momentum_y,
-                inflow_momentum_z, inflow_energy);
-
-            apply_no_slip_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
-                state_vector,
-                d_boundary_data.boundary_dofs,
-                d_boundary_data.boundary_ids,
-                n_entries);
-
-            apply_slip_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
-                state_vector,
-                d_boundary_data.boundary_dofs,
-                d_boundary_data.boundary_ids,
-                d_boundary_data.boundary_normals,
-                n_entries);
-
-            apply_dynamic_bc_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
-                state_vector,
-                d_boundary_data.boundary_dofs,
-                d_boundary_data.boundary_ids,
-                d_boundary_data.boundary_normals,
-                inflow_rho, inflow_momentum_x, inflow_momentum_y,
-                inflow_momentum_z, inflow_energy,
-                n_entries);
+                const int blocks_entries = (n_entries + 255) / 256;
+                apply_becker_dirichlet_entry_kernel<dim, Number><<<blocks_entries, 256, 0, stream>>>(
+                    state_vector,
+                    d_boundary_data.boundary_dofs,
+                    d_boundary_data.boundary_ids,
+                    dof_positions_x,
+                    becker_params,
+                    current_time,
+                    n_entries,
+                    d_becker_v_cache);
+                apply_boundary_conditions<dim, Number>(
+                    state_vector, d_boundary_data,
+                    inflow_rho, inflow_momentum_x, inflow_momentum_y,
+                    inflow_momentum_z, inflow_energy,
+                    stream, false);
+            } else {
+                apply_boundary_conditions<dim, Number>(
+                    state_vector, d_boundary_data,
+                    inflow_rho, inflow_momentum_x, inflow_momentum_y,
+                    inflow_momentum_z, inflow_energy,
+                    stream);
+            }
         }
 
         compute_derived_quantities_kernel<dim, Number><<<prepareConfig.blocksPerGrid,
@@ -450,7 +483,7 @@ private:
                                                           0, stream>>>(
             state_vector, d_pressure, d_speed_of_sound, d_precomputed, n_dofs);
     }
-
+    
     Number compute_step_hyperbolic(int stage,
         State<dim, Number>& d_old_state_vector,
         State<dim, Number>& d_new_state_vector,
@@ -461,8 +494,8 @@ private:
         Number stage_weight_acc,
         Number tau_max)
     {
-        compute_off_diag_d_ij_and_alpha_i_kernel<dim, Number><<<viscosityConfig.blocksPerGrid,
-                                                            viscosityConfig.threadsPerBlock,
+        compute_off_diag_d_ij_and_alpha_i_kernel<dim, Number><<<viscosityConfig.blocksPerGrid, 
+                                                            viscosityConfig.threadsPerBlock, 
                                                             0, stream>>>(
             d_old_state_vector, d_pressure, d_speed_of_sound, d_alpha_i, d_dij,
             d_sparsity, d_cij, d_mi, d_precomputed,
@@ -475,17 +508,17 @@ private:
                 complete_boundaries_kernel<dim, Number><<<boundary_blocks, 256, 0, stream>>>(
                     d_old_state_vector, d_dij, d_mij, d_cij, d_sparsity, d_coupling_pairs);
             }
-
+            
             Number initial_tau = Number(1e20);
             CUDA_CHECK(cudaMemcpyAsync(d_tau, &initial_tau, sizeof(Number),
                                     cudaMemcpyHostToDevice, stream));
-
-            compute_diagonal_and_tau_kernel<dim, Number><<<diagonalConfig.blocksPerGrid,
-                                                        diagonalConfig.threadsPerBlock,
-                                                        diagonalConfig.sharedMemorySize,
+            
+            compute_diagonal_and_tau_kernel<dim, Number><<<diagonalConfig.blocksPerGrid, 
+                                                        diagonalConfig.threadsPerBlock, 
+                                                        diagonalConfig.sharedMemorySize, 
                                                         stream>>>(
                 d_dij, d_tau, d_mij, d_mi, cfl, n_dofs);
-
+            
             CUDA_CHECK(cudaMemcpyAsync(&tau, d_tau, sizeof(Number),
                                        cudaMemcpyDeviceToHost, stream));
             CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -493,28 +526,28 @@ private:
         }
 
         low_order_update_kernel<dim, Number><<<lowOrderConfig.blocksPerGrid,
-                                            lowOrderConfig.threadsPerBlock,
+                                            lowOrderConfig.threadsPerBlock, 
                                             0, stream>>>(
             d_old_state_vector, d_new_state_vector, d_pressure, d_alpha_i, d_dij, d_pij, d_ri, d_bounds,
             d_sparsity, d_mij, d_mi, d_mi_inv, d_cij, d_precomputed,
             tau, measure_of_omega, d_stage_state_vector_0, d_stage_state_vector_1,
             stage_weight_0, stage_weight_1, stage_weight_acc, stage, n_dofs);
 
-        compute_limiter_kernel<dim, Number><<<limiterConfig.blocksPerGrid,
-                                            limiterConfig.threadsPerBlock,
+        compute_limiter_kernel<dim, Number><<<limiterConfig.blocksPerGrid, 
+                                            limiterConfig.threadsPerBlock, 
                                             0, stream>>>(
             d_new_state_vector, d_pij, d_ri, d_lij, d_bounds,
             d_sparsity, d_mij, d_mi_inv, tau, n_dofs);
 
-        high_order_update_iter1_kernel<dim, Number><<<highOrderConfig.blocksPerGrid,
-                                                    highOrderConfig.threadsPerBlock,
+        high_order_update_iter1_kernel<dim, Number><<<highOrderConfig.blocksPerGrid, 
+                                                    highOrderConfig.threadsPerBlock, 
                                                 0, stream>>>(
             d_new_state_vector, d_pij, d_lij, d_lij_next, d_bounds, d_sparsity, n_dofs);
 
         std::swap(d_lij, d_lij_next);
 
-        high_order_update_iter2_kernel<dim, Number><<<highOrderConfig.blocksPerGrid,
-                                                    highOrderConfig.threadsPerBlock,
+        high_order_update_iter2_kernel<dim, Number><<<highOrderConfig.blocksPerGrid, 
+                                                    highOrderConfig.threadsPerBlock, 
                                                     0, stream>>>(
             d_new_state_vector, d_pij, d_lij, d_sparsity, n_dofs);
 
@@ -525,9 +558,10 @@ private:
     {
         sadd_kernel<dim, Number><<<prepareConfig.blocksPerGrid, prepareConfig.threadsPerBlock, 0, stream>>>(
             dst, src, s, b, n_dofs);
-    }
+    }    
 
 };
+
 
 template<int dim, typename Number_cu>
 Number_cu cuda_time_loop(
@@ -557,7 +591,7 @@ Number_cu cuda_time_loop(
     State<dim, Number_cu> d_temp_0, d_temp_1, d_temp_2, d_temp_3, d_new_U;
     Pij<dim, Number_cu> d_pij;
     Ri<dim, Number_cu> d_ri;
-
+    
     allocate_state(d_temp_0, n_dofs);
     allocate_state(d_temp_1, n_dofs);
     allocate_state(d_temp_2, n_dofs);
@@ -565,7 +599,7 @@ Number_cu cuda_time_loop(
     allocate_state(d_new_U, n_dofs);
     allocate_pij(d_pij, nnz_mij);
     allocate_ri(d_ri, n_dofs);
-
+    
     Number_cu* d_pressure;
     Number_cu* d_speed_of_sound;
     Number_cu* d_precomputed;
@@ -574,7 +608,7 @@ Number_cu cuda_time_loop(
     Number_cu* d_bounds;
     Number_cu* d_lij;
     Number_cu* d_lij_next;
-
+    
     CUDA_CHECK(cudaMalloc(&d_pressure, n_dofs * sizeof(Number_cu)));
     CUDA_CHECK(cudaMalloc(&d_speed_of_sound, n_dofs * sizeof(Number_cu)));
     CUDA_CHECK(cudaMalloc(&d_precomputed, n_dofs * 2 * sizeof(Number_cu)));
@@ -605,6 +639,29 @@ Number_cu cuda_time_loop(
     const Number_cu mu = static_cast<Number_cu>(config.mu);
     const Number_cu kappa = static_cast<Number_cu>(config.kappa);
     const bool is_navier_stokes = config.is_navier_stokes();
+    const bool becker_enabled = config.becker_verification;
+
+    BeckerParams becker_params = {};
+    Number_cu* d_dof_positions_x = nullptr;
+    if (becker_enabled) {
+        BeckerSolutionCPU becker_cpu(config.gamma,
+                                      config.becker_velocity_left,
+                                      config.becker_velocity_right,
+                                      config.becker_density_left,
+                                      config.becker_velocity_galilean,
+                                      config.mu,
+                                      config.becker_position);
+        becker_params = becker_cpu.make_gpu_params();
+
+        std::vector<Number_cu> h_dof_x(n_dofs);
+        for (int i = 0; i < n_dofs; ++i) {
+            h_dof_x[i] = static_cast<Number_cu>(offline_data.node_positions[i][0]);
+        }
+        CUDA_CHECK(cudaMalloc(&d_dof_positions_x, n_dofs * sizeof(Number_cu)));
+        CUDA_CHECK(cudaMemcpy(d_dof_positions_x, h_dof_x.data(),
+                              n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+        std::cout << "  Becker verification: DOF positions transferred to GPU" << std::endl;
+    }
 
     std::vector<int> h_slave_idx;
     std::vector<int> h_master_idx;
@@ -632,7 +689,7 @@ Number_cu cuda_time_loop(
     Number_cu inflow_momentum_z = (dim == 3) ? (rho_inf * w_inf) : Number_cu(0);
     Number_cu inflow_energy = E_inf;
 
-    {
+    if (!becker_enabled) {
         std::vector<Number_cu> h_init_rho(n_dofs, inflow_rho);
         std::vector<Number_cu> h_init_mx(n_dofs, inflow_momentum_x);
         std::vector<Number_cu> h_init_my(n_dofs, inflow_momentum_y);
@@ -650,10 +707,23 @@ Number_cu cuda_time_loop(
         CUDA_CHECK(cudaMemcpy(d_U.energy, h_init_e.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
     }
 
-    prepare_state<dim, Number_cu>(
-        d_U, d_precomputed, d_boundary_data,
+    apply_boundary_conditions<dim, Number_cu>(
+        d_U, d_boundary_data,
         inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
-        n_dofs, compute_stream);
+        compute_stream);
+
+    if (becker_enabled && d_dof_positions_x != nullptr) {
+        const int blocks_bc = (n_dofs + 255) / 256;
+        apply_becker_dirichlet_kernel<dim, Number_cu><<<blocks_bc, 256, 0, compute_stream>>>(
+            d_U, d_boundary_data.bc_type, d_dof_positions_x,
+            becker_params, Number_cu(0), n_dofs);
+    }
+
+    {
+        const int blocks_dq = (n_dofs + 255) / 256;
+        compute_derived_quantities_kernel<dim, Number_cu><<<blocks_dq, 256, 0, compute_stream>>>(
+            d_U, d_pressure, d_speed_of_sound, d_precomputed, n_dofs);
+    }
 
     CUDA_CHECK(cudaStreamSynchronize(compute_stream));
 
@@ -661,18 +731,18 @@ Number_cu cuda_time_loop(
     CUDA_CHECK(cudaMalloc(&d_transpose_indices, nnz_mij * sizeof(int)));
 
     Sparsity d_sparsity_with_transpose = d_sparsity;
-    d_sparsity_with_transpose.transpose_indices = d_transpose_indices;
+    d_sparsity_with_transpose.transpose_indices = d_transpose_indices;    
 
     StageExecutor<dim, Number_cu> stage_executor(
         d_U, d_temp_0, d_temp_1, d_temp_2, d_temp_3, d_new_U,
         d_pressure, d_speed_of_sound, d_precomputed, d_alpha_i,
         d_dij, d_pij, d_ri, d_bounds, d_lij, d_lij_next,
         d_mij_matrix, d_mi_matrix, d_mi_inv_matrix, d_cij_matrix, d_sparsity_with_transpose,
-        d_boundary_data, d_coupling_pairs,
+        d_boundary_data, d_coupling_pairs, 
         inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
         measure_of_omega, static_cast<Number_cu>(config.cfl_number),
         Number_cu(1.0), n_dofs, nnz_mij, mu, kappa,
-        is_navier_stokes,
+        is_navier_stokes, becker_enabled, becker_params, d_dof_positions_x,
         d_slave_idx, d_master_idx, n_periodic_pairs,
         offline_data, compute_stream);
 
@@ -692,7 +762,7 @@ Number_cu cuda_time_loop(
     std::vector<Number_cu> h_momentum_y(n_dofs);
     std::vector<Number_cu> h_momentum_z(n_dofs);
     std::vector<Number_cu> h_energy(n_dofs);
-
+    
     CUDA_CHECK(cudaMemcpy(h_rho.data(), d_U.rho, n_dofs * sizeof(Number_cu), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_momentum_x.data(), d_U.momentum_x, n_dofs * sizeof(Number_cu), cudaMemcpyDeviceToHost));
     if constexpr (dim >= 2) {
@@ -702,7 +772,7 @@ Number_cu cuda_time_loop(
         CUDA_CHECK(cudaMemcpy(h_momentum_z.data(), d_U.momentum_z, n_dofs * sizeof(Number_cu), cudaMemcpyDeviceToHost));
     }
     CUDA_CHECK(cudaMemcpy(h_energy.data(), d_U.energy, n_dofs * sizeof(Number_cu), cudaMemcpyDeviceToHost));
-
+    
     for (int i = 0; i < n_dofs; ++i) {
         output_data[i][0] = static_cast<double>(h_rho[i]);
         output_data[i][1] = static_cast<double>(h_momentum_x[i]);
@@ -710,10 +780,10 @@ Number_cu cuda_time_loop(
         if constexpr (dim == 3) output_data[i][3] = static_cast<double>(h_momentum_z[i]);
         output_data[i][dim + 1] = static_cast<double>(h_energy[i]);
     }
-
+    
     async_writer.enqueue_write(std::move(output_data), output_cycle++, static_cast<double>(t));
 
-    {
+    if (!becker_enabled) {
         std::cout << "\nWarming up GPU..." << std::endl;
         for (int warmup = 0; warmup < 10; ++warmup) {
             Number_cu tau = stage_executor.execute_timestep(config.final_time);
@@ -734,37 +804,44 @@ Number_cu cuda_time_loop(
             CUDA_CHECK(cudaMemcpy(d_U.momentum_z, h_momentum_z.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
         }
         CUDA_CHECK(cudaMemcpy(d_U.energy, h_energy.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
+    } else {
+        std::cout << "\nBecker verification mode: skipping warmup" << std::endl;
     }
-
+    
     std::cout << "\nStarting time integration..." << std::endl;
     std::cout << "  CFL: " << config.cfl_number << std::endl;
-
+    
     const int n_steps_per_batch = 20;
     const int display_every_n_steps = 10000;
     const int measure_interval = 100;
-
+    
     float total_kernel_time = 0;
     int total_steps_measured = 0;
 
     auto loop_start = std::chrono::high_resolution_clock::now();
-
+    
     while (t < config.final_time) {
         if (step % measure_interval == 0 && step > 0) {
             cudaEventRecord(prof_start, compute_stream);
         }
-
+        
         Number_cu tau_max_remaining = config.final_time - t;
-
+        
         Number_cu batch_dt = 0;
         for (int batch_step = 0; batch_step < n_steps_per_batch; ++batch_step) {
             Number_cu tau = stage_executor.execute_timestep(tau_max_remaining - batch_dt);
             batch_dt += tau;
 
+            if (becker_enabled) {
+                stage_executor.current_time = Number_cu(t + batch_dt);
+                stage_executor.apply_becker_bc(d_U, Number_cu(t + batch_dt));
+            }
+
             if (t + batch_dt >= config.final_time) {
                 break;
             }
         }
-
+        
         if (step % measure_interval == 0 && step > 0) {
             cudaEventRecord(prof_stop, compute_stream);
             cudaEventSynchronize(prof_stop);
@@ -772,45 +849,45 @@ Number_cu cuda_time_loop(
             cudaEventElapsedTime(&milliseconds, prof_start, prof_stop);
             total_kernel_time += milliseconds;
             total_steps_measured += n_steps_per_batch;
-
+            
             float ms_per_step = milliseconds / n_steps_per_batch;
             float steps_per_second = 1000.0f / ms_per_step;
-
+            
             if (step % display_every_n_steps == 0) {
                 std::cout << "Step " << std::setw(6) << step
                           << ", t = " << std::setw(10) << std::fixed << std::setprecision(6) << t
                           << ", progress = " << std::fixed << std::setprecision(1)
                           << (100.0 * t / config.final_time) << "%"
-                          << ", perf = " << std::scientific << std::setprecision(2)
+                          << ", perf = " << std::scientific << std::setprecision(2) 
                           << steps_per_second << " steps/s"
                           << ", kernel time = " << std::fixed << std::setprecision(3)
                           << ms_per_step << " ms/step" << std::endl;
             }
         }
-
+        
         t += batch_dt;
         step += n_steps_per_batch;
         stage_executor.current_time = Number_cu(t);
-
+        
         if (t >= next_output_time || t >= config.final_time - 1e-10)
         {
-            CUDA_CHECK(cudaMemcpyAsync(h_rho.data(), d_U.rho, n_dofs * sizeof(Number_cu),
+            CUDA_CHECK(cudaMemcpyAsync(h_rho.data(), d_U.rho, n_dofs * sizeof(Number_cu), 
                                        cudaMemcpyDeviceToHost, output_stream));
-            CUDA_CHECK(cudaMemcpyAsync(h_momentum_x.data(), d_U.momentum_x, n_dofs * sizeof(Number_cu),
+            CUDA_CHECK(cudaMemcpyAsync(h_momentum_x.data(), d_U.momentum_x, n_dofs * sizeof(Number_cu), 
                                        cudaMemcpyDeviceToHost, output_stream));
             if constexpr (dim >= 2) {
-                CUDA_CHECK(cudaMemcpyAsync(h_momentum_y.data(), d_U.momentum_y, n_dofs * sizeof(Number_cu),
+                CUDA_CHECK(cudaMemcpyAsync(h_momentum_y.data(), d_U.momentum_y, n_dofs * sizeof(Number_cu), 
                                            cudaMemcpyDeviceToHost, output_stream));
             }
             if constexpr (dim == 3) {
-                CUDA_CHECK(cudaMemcpyAsync(h_momentum_z.data(), d_U.momentum_z, n_dofs * sizeof(Number_cu),
+                CUDA_CHECK(cudaMemcpyAsync(h_momentum_z.data(), d_U.momentum_z, n_dofs * sizeof(Number_cu), 
                                            cudaMemcpyDeviceToHost, output_stream));
             }
-            CUDA_CHECK(cudaMemcpyAsync(h_energy.data(), d_U.energy, n_dofs * sizeof(Number_cu),
+            CUDA_CHECK(cudaMemcpyAsync(h_energy.data(), d_U.energy, n_dofs * sizeof(Number_cu), 
                                        cudaMemcpyDeviceToHost, output_stream));
-
+            
             CUDA_CHECK(cudaStreamSynchronize(output_stream));
-
+            
             std::vector<std::array<double, dim + 2>> output_data(n_dofs);
             #pragma omp parallel for
             for (int i = 0; i < n_dofs; ++i) {
@@ -819,7 +896,7 @@ Number_cu cuda_time_loop(
                 if constexpr (dim >= 2) output_data[i][2] = static_cast<double>(h_momentum_y[i]);
                 if constexpr (dim == 3) output_data[i][3] = static_cast<double>(h_momentum_z[i]);
                 output_data[i][dim + 1] = static_cast<double>(h_energy[i]);
-            }
+            }    
 
             Number_cu rho_min = h_rho[0], rho_max = h_rho[0];
             Number_cu E_min = h_energy[0], E_max = h_energy[0];
@@ -837,7 +914,7 @@ Number_cu cuda_time_loop(
             async_writer.enqueue_write(std::move(output_data), output_cycle++, static_cast<double>(t));
             next_output_time += output_interval;
         }
-
+        
         if (step % display_every_n_steps == 0 && step % measure_interval != 0) {
             auto current_time = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<double>(current_time - loop_start).count();
@@ -846,34 +923,34 @@ Number_cu cuda_time_loop(
                       << ", t = " << std::setw(10) << std::fixed << std::setprecision(6) << t
                       << ", progress = " << std::fixed << std::setprecision(1)
                       << (100.0 * t / config.final_time) << "%"
-                      << ", perf = " << std::scientific << std::setprecision(2)
+                      << ", perf = " << std::scientific << std::setprecision(2) 
                       << steps_per_second << " steps/s" << std::endl;
         }
-
+        
         if (step > 500000) {
             std::cerr << "\nMaximum iterations exceeded." << std::endl;
             break;
         }
     }
-
+    
     async_writer.wait_for_completion();
-
+    
     auto loop_end = std::chrono::high_resolution_clock::now();
     auto total_time = std::chrono::duration<double>(loop_end - loop_start).count();
-
+    
     std::cout << "\nSimulation complete!" << std::endl;
     std::cout << "  Final time: " << t << std::endl;
     std::cout << "  Total steps: " << step << std::endl;
     std::cout << "  Average dt: " << t/step << std::endl;
     std::cout << "  Wall time: " << total_time << " seconds" << std::endl;
     std::cout << "  Performance: " << step/total_time << " steps/second" << std::endl;
-
+    
     if (total_steps_measured > 0) {
         float avg_ms_per_step = total_kernel_time / total_steps_measured;
         std::cout << "\n=== GPU Performance Summary ===" << std::endl;
         std::cout << "  Average kernel time: " << avg_ms_per_step << " ms/step" << std::endl;
         std::cout << "  Average throughput: " << 1000.0f / avg_ms_per_step << " steps/s" << std::endl;
-        std::cout << "  DoFs processed per second: " << (n_dofs * 1000.0f / avg_ms_per_step)
+        std::cout << "  DoFs processed per second: " << (n_dofs * 1000.0f / avg_ms_per_step) 
                   << " DoFs/s" << std::endl;
     }
 
@@ -884,7 +961,7 @@ Number_cu cuda_time_loop(
     free_state(d_new_U);
     free_pij(d_pij);
     free_ri(d_ri);
-
+    
     CUDA_CHECK(cudaFree(d_pressure));
     CUDA_CHECK(cudaFree(d_speed_of_sound));
     CUDA_CHECK(cudaFree(d_precomputed));
@@ -898,32 +975,36 @@ Number_cu cuda_time_loop(
     CUDA_CHECK(cudaStreamDestroy(compute_stream));
     CUDA_CHECK(cudaStreamDestroy(output_stream));
     CUDA_CHECK(cudaFree(d_transpose_indices));
+    if (d_dof_positions_x != nullptr) {
+        CUDA_CHECK(cudaFree(d_dof_positions_x));
+    }
     if (d_slave_idx) CUDA_CHECK(cudaFree(d_slave_idx));
     if (d_master_idx) CUDA_CHECK(cudaFree(d_master_idx));
 
     return t;
 }
 
+
 template float cuda_time_loop<2, float>(
     const MijMatrix<float>&, const MiMatrix<float>&, const MiMatrixInverse<float>&,
-    const CijMatrix<2, float>&, const Sparsity&, State<2, float>&,
-    const BoundaryData<2, float>&, const CouplingPairs&, float, int, int, int,
+    const CijMatrix<2, float>&, const Sparsity&, State<2, float>&, 
+    const BoundaryData<2, float>&, const CouplingPairs&, float, int, int, int, 
     const Configuration&, const OfflineData<2, double>&, VTUOutput<2>*);
 
 template double cuda_time_loop<2, double>(
     const MijMatrix<double>&, const MiMatrix<double>&, const MiMatrixInverse<double>&,
-    const CijMatrix<2, double>&, const Sparsity&, State<2, double>&,
-    const BoundaryData<2, double>&, const CouplingPairs&, double, int, int, int,
+    const CijMatrix<2, double>&, const Sparsity&, State<2, double>&, 
+    const BoundaryData<2, double>&, const CouplingPairs&, double, int, int, int, 
     const Configuration&, const OfflineData<2, double>&, VTUOutput<2>*);
 
 template float cuda_time_loop<3, float>(
     const MijMatrix<float>&, const MiMatrix<float>&, const MiMatrixInverse<float>&,
-    const CijMatrix<3, float>&, const Sparsity&, State<3, float>&,
-    const BoundaryData<3, float>&, const CouplingPairs&, float, int, int, int,
+    const CijMatrix<3, float>&, const Sparsity&, State<3, float>&, 
+    const BoundaryData<3, float>&, const CouplingPairs&, float, int, int, int, 
     const Configuration&, const OfflineData<3, double>&, VTUOutput<3>*);
 
 template double cuda_time_loop<3, double>(
     const MijMatrix<double>&, const MiMatrix<double>&, const MiMatrixInverse<double>&,
-    const CijMatrix<3, double>&, const Sparsity&, State<3, double>&,
-    const BoundaryData<3, double>&, const CouplingPairs&, double, int, int, int,
+    const CijMatrix<3, double>&, const Sparsity&, State<3, double>&, 
+    const BoundaryData<3, double>&, const CouplingPairs&, double, int, int, int, 
     const Configuration&, const OfflineData<3, double>&, VTUOutput<3>*);

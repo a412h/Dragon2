@@ -1,0 +1,36 @@
+# Navier-Stokes Mach 8 flow for NASA capsule atmospheric reentry
+
+subsection A - TimeLoop
+    set basename            = ns-mach3-capsule-2d
+    set final time          = 10.0
+    set timer granularity   = 1.0
+end
+
+subsection B - Equation
+    set dimension       = 2
+    set equation        = navier stokes
+    set gamma           = 1.4
+    set mu              = 0
+end
+
+subsection C - Discretization
+    set geometry        = capsule
+    set mesh refinement = 5
+
+    subsection capsule
+        set sphere diameter multiplier = 8.0
+    end
+end
+
+subsection E - InitialValues
+    set direction     = -1, 0, 0
+
+    subsection uniform
+        set primitive state = 1.4, 3, 1
+    end
+end
+
+subsection H - TimeIntegrator
+    set cfl min               = 0.9
+    set cfl max               = 0.9
+end

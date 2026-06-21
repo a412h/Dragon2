@@ -17,14 +17,14 @@ struct Indicator {
     Number left;
     Number right[dim + 2];
     static constexpr int problem_dimension = dim + 2;
-
+    
     __device__
     void reset(int i,
                const Number U_i_local[dim+2],
                const Number* precomputed)
     {
         const Number s_i = precomputed[i * 2];
-
+        
         const Number rho_i = U_i_local[0];
         rho_i_inverse = Number(1.) / rho_i;
         eta_i = precomputed[i * 2 + 1];
@@ -35,7 +35,7 @@ struct Indicator {
         for (int k = 1; k < problem_dimension; ++k) {
             d_eta_i[k] = d_eta_tmp[k];
         }
-
+        
         f_i = PF::f_local(U_i_local);
 
         left = Number(0.);
@@ -43,7 +43,7 @@ struct Indicator {
             right[k] = Number(0.);
         }
     }
-
+    
     __device__
     void accumulate(int j,
                    const Number U_j_local[dim+2],
@@ -53,20 +53,20 @@ struct Indicator {
 
         const Number s_j = precomputed[j * 2];
         const Number eta_j = precomputed[j * 2 + 1];
-
+        
         const Number rho_j = U_j_local[0];
         const Number rho_j_inverse = Number(1.) / rho_j;
 
         Number m_j_dot_c_ij = Number(0.);
         for (int d = 0; d < dim; ++d)
             m_j_dot_c_ij += U_j_local[1+d] * c_ij[d];
-
+        
         const auto f_j = PF::f_local(U_j_local);
-
-        const Number entropy_flux =
+        
+        const Number entropy_flux = 
             (eta_j * rho_j_inverse - eta_i * rho_i_inverse) * m_j_dot_c_ij;
         left += entropy_flux;
-
+        
         for (int k = 0; k < problem_dimension; ++k) {
             Number component = Number(0.);
             for (int d = 0; d < dim; ++d) {
@@ -75,24 +75,25 @@ struct Indicator {
             right[k] += component;
         }
     }
-
+    
     __device__
     Number alpha(const Number hd_i, const Number evc_factor) const
     {
         Number numerator = left;
         Number denominator = fabs(left);
-
+        
         for (int k = 0; k < problem_dimension; ++k) {
             numerator -= d_eta_i[k] * right[k];
             denominator += fabs(d_eta_i[k] * right[k]);
         }
-
-        const Number quotient =
+        
+        const Number quotient = 
             fabs(numerator) / (denominator + hd_i * fabs(eta_i));
-
+        
         return fmin(Number(1.), evc_factor * quotient);
     }
 };
+
 
 template<int dim, typename Number>
 __global__ void compute_alpha_kernel(
@@ -137,7 +138,7 @@ __global__ void compute_alpha_kernel(
         if constexpr (dim >= 2) U_j_local[2] = U.momentum_y[j];
         if constexpr (dim == 3) U_j_local[3] = U.momentum_z[j];
         U_j_local[dim + 1] = U.energy[j];
-
+        
         indicator.accumulate(j, U_j_local, c_ij, precomputed);
     }
 

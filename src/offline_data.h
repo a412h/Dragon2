@@ -1,6 +1,9 @@
+
+
 #ifndef OFFLINE_DATA_H
 #define OFFLINE_DATA_H
 
+#include "fe_config.h"
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_values.h>
@@ -39,7 +42,7 @@ public:
         unsigned int i;
         unsigned int col_idx;
         unsigned int j;
-
+        
         bool operator==(const CouplingDescription& other) const {
             return i == other.i && col_idx == other.col_idx && j == other.j;
         }
@@ -68,7 +71,7 @@ public:
     AffineConstraints<Number> periodic_constraints;
 
     OfflineData(Triangulation<dim>& triangulation)
-        : dof_handler(triangulation), finite_element(1) {
+        : dof_handler(triangulation), finite_element(fe_degree) {
 
         dof_handler.distribute_dofs(finite_element);
 
@@ -150,7 +153,7 @@ public:
         lumped_mass_matrix_inverse.resize(n_dofs);
         mass_matrix.resize(n_dofs);
         c_ij.resize(n_dofs);
-
+        
         for (unsigned int i = 0; i < n_dofs; ++i) {
             mass_matrix[i].resize(sparsity[i].size(), Number(0));
             c_ij[i].resize(sparsity[i].size());
@@ -237,20 +240,20 @@ public:
             std::cout << std::endl;
         }
     }
-
+    
 private:
     void compute_matrices() {
-        QGauss<dim> quadrature(2);
+        QGauss<dim> quadrature(fe_degree + 1);
         FEValues<dim> fe_values(finite_element, quadrature,
-                                update_values | update_gradients |
+                                update_values | update_gradients | 
                                 update_JxW_values | update_quadrature_points);
-
+        
         const unsigned int dofs_per_cell = finite_element.dofs_per_cell;
         const unsigned int n_q_points = quadrature.size();
-
+        
         std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
         measure_of_omega = Number(0);
-
+        
         int n_cells_processed = 0;
         int n_cells_with_slave = 0;
         for (const auto& cell : dof_handler.active_cell_iterators()) {
@@ -321,21 +324,21 @@ private:
             }
         }
     }
-
+    
     BoundaryMap construct_boundary_map() {
-        using BoundaryData = std::tuple<std::array<Number, dim>,
-                                       Number,
-                                       Number,
-                                       types::boundary_id,
-                                       Point<dim>>;
-
+        using BoundaryData = std::tuple<std::array<Number, dim>,  
+                                       Number,                    
+                                       Number,                    
+                                       types::boundary_id,        
+                                       Point<dim>>;               
+        
         std::multimap<unsigned int, BoundaryData> preliminary_map;
-
-        QGauss<dim-1> face_quadrature(2);
+        
+        QGauss<dim-1> face_quadrature(fe_degree + 1);
         FEFaceValues<dim> fe_face_values(finite_element, face_quadrature,
                                          update_normal_vectors | update_values |
                                          update_JxW_values);
-
+        
         MappingQ1<dim> mapping;
         std::vector<types::global_dof_index> local_dof_indices;
         const auto &support_points = finite_element.get_unit_support_points();
@@ -344,7 +347,7 @@ private:
             const unsigned int dofs_per_cell = finite_element.dofs_per_cell;
             local_dof_indices.resize(dofs_per_cell);
             cell->get_dof_indices(local_dof_indices);
-
+            
             for (unsigned int f : cell->face_indices()) {
                 const auto face = cell->face(f);
                 if (!face->at_boundary()) continue;
@@ -353,46 +356,46 @@ private:
 
                 if (id == 11 || id == 12) continue;
                 fe_face_values.reinit(cell, f);
-
+                
                 for (unsigned int j = 0; j < dofs_per_cell; ++j) {
                     if (!finite_element.has_support_on_face(j, f))
                         continue;
-
+                    
                     const unsigned int dof_index = local_dof_indices[j];
-
+                    
                     std::array<Number, dim> normal;
                     normal.fill(Number(0));
                     Number boundary_mass = Number(0);
-
+                    
                     for (unsigned int q = 0; q < face_quadrature.size(); ++q) {
                         const auto& n = fe_face_values.normal_vector(q);
                         const Number JxW = fe_face_values.JxW(q);
                         const Number phi_j = fe_face_values.shape_value(j, q);
-
+                        
                         boundary_mass += phi_j * JxW;
                         for (int d = 0; d < dim; ++d) {
                             normal[d] += phi_j * n[d] * JxW;
                         }
                     }
-
+                    
                     Point<dim> position = mapping.transform_unit_to_real_cell(cell, support_points[j]);
-
-                    preliminary_map.insert({dof_index,
+                    
+                    preliminary_map.insert({dof_index, 
                                           {normal, boundary_mass, boundary_mass, id, position}});
                 }
             }
         }
 
         std::multimap<unsigned int, BoundaryData> filtered_map;
-
+        
         for (auto entry : preliminary_map) {
             bool inserted = false;
             const auto range = filtered_map.equal_range(entry.first);
-
+            
             for (auto it = range.first; it != range.second; ++it) {
                 auto &[new_normal, new_normal_mass, new_boundary_mass, new_id, new_position] = entry.second;
                 auto &[normal, normal_mass, boundary_mass, id, position] = it->second;
-
+                
                 if (id != new_id)
                     continue;
 
@@ -404,14 +407,14 @@ private:
                 }
                 normal_norm = std::sqrt(normal_norm);
                 new_normal_norm = std::sqrt(new_normal_norm);
-
+                
                 if (normal_norm > Number(1e-14) && new_normal_norm > Number(1e-14)) {
                     Number dot = Number(0);
                     for (int d = 0; d < dim; ++d) {
                         dot += normal[d] * new_normal[d];
                     }
                     dot /= (normal_norm * new_normal_norm);
-
+                    
                     if (dot > Number(0.5)) {
                         for (int d = 0; d < dim; ++d) {
                             normal[d] += new_normal[d];
@@ -422,7 +425,7 @@ private:
                     }
                 }
             }
-
+            
             if (!inserted) {
                 filtered_map.insert(entry);
             }
@@ -439,7 +442,7 @@ private:
         unsigned int n_dynamic = 0;
         for (const auto& [index, data] : filtered_map) {
             auto [normal, normal_mass, boundary_mass, id, position] = data;
-            if (id == 5) {
+            if (id == 5) {  
                 for (int d = 0; d < dim; ++d) {
                     min_pos[d] = std::min(min_pos[d], position[d]);
                     max_pos[d] = std::max(max_pos[d], position[d]);
@@ -473,7 +476,7 @@ private:
                 for (int d = 0; d < dim; ++d) {
                     normal[d] /= radius;
                 }
-                normal_mass = radius;
+                normal_mass = radius;  
             } else {
 
                 Number norm_squared = Number(0);
@@ -492,30 +495,30 @@ private:
 
         return result;
     }
-
+    
     CouplingBoundaryPairs collect_coupling_boundary_pairs() {
         std::set<unsigned int> boundary_indices;
         for (const auto& bd : boundary_map) {
             boundary_indices.insert(bd.dof_index);
         }
-
+        
         CouplingBoundaryPairs result;
-
+        
         for (const auto& bd : boundary_map) {
             const unsigned int i = bd.dof_index;
             const auto& sparsity_row = sparsity[i];
-
+            
             if (sparsity_row.size() == 1) continue;
-
+            
             for (size_t col_idx = 1; col_idx < sparsity_row.size(); ++col_idx) {
                 const unsigned int j = sparsity_row[col_idx];
-
+                
                 if (boundary_indices.find(j) != boundary_indices.end()) {
                     result.push_back({i, static_cast<unsigned int>(col_idx), j});
                 }
             }
         }
-
+        
         return result;
     }
 
@@ -524,13 +527,13 @@ private:
         std::set<unsigned int> boundary_indices;
         for (const auto& bd : boundary_map)
             boundary_indices.insert(bd.dof_index);
-
+        
         CouplingBoundaryPairs result;
 
         for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i) {
 
             if (boundary_indices.find(i) != boundary_indices.end()) continue;
-
+            
             const auto& sparsity_row = sparsity[i];
 
             if (sparsity_row.size() == 1) continue;
@@ -543,19 +546,19 @@ private:
                 }
             }
         }
-
+        
         return result;
-    }
-
+    }    
+        
     void extract_node_positions() {
         node_positions.resize(dof_handler.n_dofs());
-
+        
         std::map<types::global_dof_index, Point<dim>> support_points;
         MappingQ1<dim> mapping;
-        DoFTools::map_dofs_to_support_points(mapping,
-                                            dof_handler,
+        DoFTools::map_dofs_to_support_points(mapping, 
+                                            dof_handler, 
                                             support_points);
-
+        
         for (const auto& [dof, point] : support_points) {
             node_positions[dof] = point;
         }

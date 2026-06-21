@@ -1,3 +1,4 @@
+
 #ifndef PARABOLIC_KERNELS_CUH
 #define PARABOLIC_KERNELS_CUH
 
@@ -5,6 +6,10 @@
 #include "data_struct.cuh"
 #include "boundary_conditions.cuh"
 #include "atomic_operations.cuh"
+
+
+
+
 
 template<int dim, typename Number>
 __global__ void __launch_bounds__(256, 4) build_velocity_rhs_kernel(
@@ -56,11 +61,11 @@ __global__ void __launch_bounds__(256, 4) build_velocity_rhs_kernel(
     internal_energy[i] = rho_e_i * rho_i_inv;
 
     const int id = __ldg(&boundary_data.bc_type[i]);
-    if (id < 0) return;
+    if (id < 0) return;  
 
     const int b = __ldg(&boundary_data.bc_index[i]);
 
-    if (id == 2) {
+    if (id == 2) {  
         Number V_i[dim];
         Number RHS_i[dim];
         #pragma unroll
@@ -89,14 +94,14 @@ __global__ void __launch_bounds__(256, 4) build_velocity_rhs_kernel(
             velocity_rhs[i * dim + d] = RHS_i[d];
         }
     }
-    else if (id == 1) {
+    else if (id == 1) {  
         #pragma unroll
         for (int d = 0; d < dim; ++d) {
             velocity[i * dim + d] = Number(0);
             velocity_rhs[i * dim + d] = Number(0);
         }
     }
-    else if (id == 4) {
+    else if (id == 4) {  
 
         const Number e_i_dir = rho_e_i * rho_i_inv;
 
@@ -104,11 +109,12 @@ __global__ void __launch_bounds__(256, 4) build_velocity_rhs_kernel(
         for (int d = 0; d < dim; ++d) {
             const Number V_d = M_i[d] * rho_i_inv;
             velocity[i * dim + d] = V_d;
-            velocity_rhs[i * dim + d] = V_d;
+            velocity_rhs[i * dim + d] = V_d;  
         }
         internal_energy[i] = e_i_dir;
     }
 }
+
 
 template<int dim, typename Number>
 __global__ void update_momentum_from_velocity_kernel(
@@ -140,6 +146,9 @@ __global__ void update_momentum_from_velocity_kernel(
     if constexpr (dim == 3) new_U.momentum_z[i] = m_new[2];
 }
 
+
+
+
 template<int dim, typename Number>
 __global__ void __launch_bounds__(256, 4) complete_internal_energy_rhs_kernel(
     const State<dim, Number> old_U,
@@ -161,7 +170,7 @@ __global__ void __launch_bounds__(256, 4) complete_internal_energy_rhs_kernel(
     const Number m_i = __ldg(&lumped_mass_matrix[i]);
     const Number rho_i = __ldg(&density[i]);
     const Number e_i = __ldg(&internal_energy[i]);
-    const Number i_e_rhs = __ldg(&internal_energy_rhs[i]);
+    const Number i_e_rhs = __ldg(&internal_energy_rhs[i]);  
 
     Number V_i[dim];
     Number V_i_new[dim];
@@ -187,7 +196,7 @@ __global__ void __launch_bounds__(256, 4) complete_internal_energy_rhs_kernel(
     Number result = m_i * rho_i * (e_i + correction) + tau * i_e_rhs;
 
     const int id = __ldg(&boundary_data.bc_type[i]);
-    if (id == 4) {
+    if (id == 4) {  
 
         const Number rho_old = __ldg(&old_U.rho[i]);
         const Number rho_old_inv = Number(1) / rho_old;
@@ -248,6 +257,8 @@ __global__ void update_total_energy_from_internal_energy_kernel(
     new_U.energy[i] = rho_e_new + kinetic;
 }
 
+
+
 template<int dim, typename Number>
 __global__ void copy_density_kernel(
     State<dim, Number> new_U,
@@ -256,7 +267,7 @@ __global__ void copy_density_kernel(
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-
+    
     new_U.rho[i] = old_U.rho[i];
 }
 

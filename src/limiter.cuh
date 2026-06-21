@@ -15,7 +15,7 @@ struct Limiter {
     static constexpr Number newton_tolerance = Number(1e-10);
     static constexpr int newton_max_iterations = 2;
     static constexpr Number relaxation_factor = Number(1.0);
-
+    
     using PF = PhysicsFunctions<dim, Number>;
 
     struct Bounds {
@@ -83,17 +83,17 @@ struct Limiter {
     Bounds fully_relax_bounds(const Bounds& bounds, Number hd_i) {
         Bounds relaxed = bounds;
 
-        Number r = sqrt(hd_i);
-        r = sqrt(r);
-        r = r * r * r;
+        Number r = sqrt(hd_i);  
+        r = sqrt(r);            
+        r = r * r * r;          
         r *= relaxation_factor;
-
+        
         const Number eps = Number(1e-14);
 
         relaxed.rho_min *= max(Number(1) - r, eps);
         relaxed.rho_max *= (Number(1) + r);
         relaxed.s_min *= max(Number(1) - r, eps);
-
+        
         return relaxed;
     }
 
@@ -105,19 +105,19 @@ struct Limiter {
         const Number eps = Number(1e-14);
 
         if (abs(rho_relaxation_denominator) > eps) {
-            const Number rho_relaxation =
-                Number(2) * relaxation_factor *
-                abs(rho_relaxation_numerator) /
+            const Number rho_relaxation = 
+                Number(2) * relaxation_factor * 
+                abs(rho_relaxation_numerator) / 
                 (abs(rho_relaxation_denominator) + eps);
-
+            
             relaxed.rho_min = max(relaxed.rho_min, bounds_.rho_min - rho_relaxation);
             relaxed.rho_max = min(relaxed.rho_max, bounds_.rho_max + rho_relaxation);
         }
 
-        const Number entropy_relaxation =
+        const Number entropy_relaxation = 
             relaxation_factor * (s_interp_max - bounds_.s_min);
         relaxed.s_min = max(relaxed.s_min, bounds_.s_min - entropy_relaxation);
-
+        
         return relaxed;
     }
 
@@ -137,18 +137,18 @@ struct Limiter {
         const Number dd_112 = (dd_12 - dd_11) * scaling;
         const Number dd_122 = (dd_22 - dd_12) * scaling;
 
-        const Number discriminant_1 =
+        const Number discriminant_1 = 
             abs(dphi_p_1 * dphi_p_1 - Number(4) * phi_p_1 * dd_112);
-        const Number discriminant_2 =
+        const Number discriminant_2 = 
             abs(dphi_p_2 * dphi_p_2 - Number(4) * phi_p_2 * dd_122);
-
+        
         const Number denominator_1 = dphi_p_1 + sign * sqrt(discriminant_1);
         const Number denominator_2 = dphi_p_2 + sign * sqrt(discriminant_2);
 
-        Number t_1 = (abs(denominator_1) < eps) ? p_1 :
+        Number t_1 = (abs(denominator_1) < eps) ? p_1 : 
                      p_1 - Number(2) * phi_p_1 / denominator_1;
-
-        Number t_2 = (abs(denominator_2) < eps) ? p_2 :
+        
+        Number t_2 = (abs(denominator_2) < eps) ? p_2 : 
                      p_2 - Number(2) * phi_p_2 / denominator_2;
 
         t_1 = max(p_1, t_1);
@@ -169,7 +169,7 @@ struct Limiter {
         const Number t_max)
     {
         Number t_r = t_max;
-
+        
         const Number eps = Number(1e-14);
         const Number small = PF::vacuum_state_relaxation_small();
         const Number large = PF::vacuum_state_relaxation_large();
@@ -183,7 +183,7 @@ struct Limiter {
 
         const Number test_min = PF::filter_vacuum_density(max(Number(0), rho_U - relax * rho_max));
         const Number test_max = PF::filter_vacuum_density(max(Number(0), rho_min - relax * rho_U));
-
+        
         const Number denominator = Number(1) / (abs(rho_P) + eps * rho_max);
         if (rho_max < rho_U + t_r * rho_P)
             t_r = (rho_max - rho_U) * denominator;
@@ -192,7 +192,7 @@ struct Limiter {
         t_r = min(t_r, t_max);
         t_r = max(t_r, t_min);
 
-        Number t_l = t_min;
+        Number t_l = t_min;  
         const Number gp1 = gamma_plus_one;
         const Number s_min = bounds.s_min;
 
@@ -204,12 +204,12 @@ struct Limiter {
             for (int k = 0; k < dim + 2; ++k) {
                 U_r[k] = U[k] + t_r * P[k];
             }
-
+            
             const Number rho_r = U_r[0];
             const Number rho_r_gamma = pow(rho_r, gamma);
             const Number rho_e_r = PF::internal_energy_local(U_r);
             const Number psi_r = relax_small * rho_r * rho_e_r - s_min * rho_r * rho_r_gamma;
-
+            
             if (psi_r > Number(0)) {
                 t_l = t_r;
                 break;
@@ -220,7 +220,7 @@ struct Limiter {
             for (int k = 0; k < dim + 2; ++k) {
                 U_l[k] = U[k] + t_l * P[k];
             }
-
+            
             const Number rho_l = PF::density_local(U_l);
             const Number rho_l_gamma = pow(rho_l, gamma);
             const Number rho_e_l = PF::internal_energy_local(U_l);
@@ -234,7 +234,7 @@ struct Limiter {
             Number ied_U_r[dim + 2];
             PF::internal_energy_derivative_local(U_l, ied_U_l);
             PF::internal_energy_derivative_local(U_r, ied_U_r);
-
+            
             Number drho_e_l = Number(0);
             Number drho_e_r = Number(0);
             #pragma unroll
@@ -242,13 +242,13 @@ struct Limiter {
                 drho_e_l += ied_U_l[k] * P[k];
                 drho_e_r += ied_U_r[k] * P[k];
             }
-
+            
             const Number dpsi_l = rho_l * drho_e_l + (rho_e_l - gp1 * s_min * rho_l_gamma) * drho;
             const Number dpsi_r = rho_r * drho_e_r + (rho_e_r - gp1 * s_min * rho_r_gamma) * drho;
-
+            
             quadratic_newton_step(t_l, t_r, psi_l, psi_r, dpsi_l, dpsi_r, Number(-1));
         }
-
+        
         return t_l;
     }
 };

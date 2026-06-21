@@ -11,6 +11,10 @@
 #include "limiter.cuh"
 #include "atomic_operations.cuh"
 
+
+
+
+
 template<int dim, typename Number>
 __global__ void compute_derived_quantities_kernel(
     const State<dim, Number> d_U,
@@ -32,36 +36,6 @@ __global__ void compute_derived_quantities_kernel(
     d_speed_of_sound[tid] = sqrt(PF::gamma * d_pressure[tid] / rho);
 }
 
-template<int dim, typename Number>
-__global__ void prepare_state_kernel(
-    State<dim, Number> d_U,
-    Number* d_pressure,
-    Number* d_speed_of_sound,
-    Number* d_precomputed,
-    const BoundaryData<dim, Number> d_boundary_data,
-    Number inflow_rho,
-    Number inflow_momentum_x,
-    Number inflow_momentum_y,
-    Number inflow_momentum_z,
-    Number inflow_energy,
-    int n_dofs)
-{
-    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= n_dofs) return;
-
-    using PF = PhysicsFunctions<dim, Number>;
-
-    apply_boundary_conditions_device<dim, Number>(
-        d_U, d_boundary_data,
-        inflow_rho, inflow_momentum_x, inflow_momentum_y, inflow_momentum_z, inflow_energy,
-        tid);
-
-    compute_precomputed_values_device<dim, Number>(d_U, d_precomputed, tid);
-
-    d_pressure[tid] = PF::pressure(d_U, tid);
-    const Number rho = d_U.rho[tid];
-    d_speed_of_sound[tid] = sqrt(PF::gamma * d_pressure[tid] / rho);
-}
 
 template<int dim, typename Number>
 __global__ void __launch_bounds__(256, 4) compute_off_diag_d_ij_and_alpha_i_kernel(
@@ -123,8 +97,8 @@ __global__ void __launch_bounds__(256, 4) compute_off_diag_d_ij_and_alpha_i_kern
 
         indicator.accumulate(j, U_j_local, c_ij, precomputed);
 
-        if (idx == row_start) continue;
-        if (j < i) continue;
+        if (idx == row_start) continue; 
+        if (j < i) continue; 
 
         Number norm = PF::norm_dim(c_ij);
         Number d_ij_val = Number(0);
@@ -149,6 +123,7 @@ __global__ void __launch_bounds__(256, 4) compute_off_diag_d_ij_and_alpha_i_kern
     const Number hd_i = mass * measure_of_omega_inverse;
     alpha_i[i] = indicator.alpha(hd_i, evc_factor);
 }
+
 
 template<int dim, typename Number>
 __global__ void complete_boundaries_kernel(
@@ -227,6 +202,7 @@ __global__ void complete_boundaries_kernel(
     }
 }
 
+
 template<int dim, typename Number>
 __global__ void compute_diagonal_and_tau_kernel(
     Number* dij_matrix,
@@ -237,26 +213,26 @@ __global__ void compute_diagonal_and_tau_kernel(
     int n_dofs)
 {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
+    
     extern __shared__ __align__(sizeof(Number)) unsigned char shared_mem_raw[];
     Number* shared_tau = reinterpret_cast<Number*>(shared_mem_raw);
-
+    
     Number local_tau = Number(1e20);
-
+    
     if (tid < n_dofs) {
         const int row_start = mij_matrix.row_offsets[tid];
         const int row_end = mij_matrix.row_offsets[tid + 1];
         const int row_length = row_end - row_start;
-
+        
         if (row_length > 1) {
             Number d_sum = Number(0);
-
+            
             #pragma unroll 4
             for (int idx = row_start + 1; idx < row_end; ++idx) {
                 const int j = mij_matrix.col_indices[idx];
-
+                
                 if (j < tid) {
-                    for (int jdx = mij_matrix.row_offsets[j];
+                    for (int jdx = mij_matrix.row_offsets[j]; 
                         jdx < mij_matrix.row_offsets[j + 1]; ++jdx) {
                         if (mij_matrix.col_indices[jdx] == tid) {
                             dij_matrix[idx] = dij_matrix[jdx];
@@ -267,11 +243,14 @@ __global__ void compute_diagonal_and_tau_kernel(
                 d_sum -= dij_matrix[idx];
             }
 
-            constexpr Number safety = sizeof(Number) == 4 ? Number(-1.18e-32)
-                                                          : Number(-2.23e-302);
+            Number safety;
+            if constexpr (sizeof(Number) == 4)
+                safety = Number(-1.18e-32f);
+            else
+                safety = Number(-2.23e-302);
             d_sum = fmin(d_sum, safety);
             dij_matrix[row_start] = d_sum;
-
+            
             const Number mass = mi_matrix.values[tid];
             local_tau = cfl * mass / (Number(-2.0) * d_sum);
         }
@@ -302,6 +281,67 @@ __global__ void compute_diagonal_and_tau_kernel(
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 template<int dim, typename Number>
 __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
     const State<dim, Number> U,
@@ -330,16 +370,16 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-
+    
     using PF = PhysicsFunctions<dim, Number>;
     using LimiterType = Limiter<dim, Number>;
 
     const int row_start = __ldg(&sparsity.row_offsets[i]);
     const int row_end = __ldg(&sparsity.row_offsets[i + 1]);
     const int row_length = row_end - row_start;
-
+    
     if (row_length == 1) return;
-
+    
     const Number alpha_i_local = __ldg(&alpha_i[i]);
     const Number m_i_local = __ldg(&mi_matrix.values[i]);
     const Number m_i_inv_local = __ldg(&mi_inv_matrix.values[i]);
@@ -351,13 +391,13 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
     if constexpr (dim >= 2) U_i_array[2] = __ldg(&U.momentum_y[i]);
     if constexpr (dim == 3) U_i_array[3] = __ldg(&U.momentum_z[i]);
     U_i_array[dim + 1] = __ldg(&U.energy[i]);
-
+    
     Number U_i_new_array[dim + 2];
     #pragma unroll
     for (int k = 0; k < dim + 2; ++k) {
         U_i_new_array[k] = U_i_array[k];
     }
-
+    
     const auto flux_i = PF::f_local(U_i_array);
 
     Flux<dim, Number> flux_iHs[3];
@@ -379,9 +419,9 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
         U_stage[dim + 1] = __ldg(&stage_U_1.energy[i]);
         flux_iHs[1] = PF::f_local(U_stage);
     }
-
+    
     Number F_iH_array[dim + 2] = {0};
-
+    
     LimiterType limiter;
     limiter.reset(U_i_array, pressure_i_local, __ldg(&precomputed[i * 2]));
 
@@ -394,18 +434,18 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
         if constexpr (dim >= 2) U_j_array[2] = __ldg(&U.momentum_y[j]);
         if constexpr (dim == 3) U_j_array[3] = __ldg(&U.momentum_z[j]);
         U_j_array[dim + 1] = __ldg(&U.energy[j]);
-
+        
         const Number alpha_j_local = __ldg(&alpha_i[j]);
         const Number d_ij_local = __ldg(&dij_matrix[idx]);
         const Number factor = (alpha_i_local + alpha_j_local) * Number(0.5);
         const Number d_ijH = d_ij_local * factor;
-
+        
         Number c_ij_local[dim];
         #pragma unroll
         for (int d = 0; d < dim; ++d) {
             c_ij_local[d] = __ldg(&cij_matrix.values[idx * dim + d]);
         }
-
+        
         constexpr Number eps = Number(1e-14);
         const Number scale = (abs(d_ij_local) < eps * eps) ? Number(0) : Number(1) / d_ij_local;
         Number scaled_c_ij[dim];
@@ -413,10 +453,10 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
         for (int d = 0; d < dim; ++d) {
             scaled_c_ij[d] = c_ij_local[d] * scale;
         }
-
+        
         const auto flux_j = PF::f_local(U_j_array);
         const Number m_ij = __ldg(&mij_matrix.values[idx]);
-
+        
         Number flux_ij[dim + 2];
         #pragma unroll
         for (int k = 0; k < dim + 2; ++k) {
@@ -426,7 +466,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
                 flux_ij[k] -= (flux_i(k, d) + flux_j(k, d)) * c_ij_local[d];
             }
         }
-
+        
         #pragma unroll
         for (int k = 0; k < dim + 2; ++k) {
             U_i_new_array[k] += tau * m_i_inv_local * flux_ij[k];
@@ -450,7 +490,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
             if constexpr (dim >= 2) U_j_stage[2] = __ldg(&stage_U_0.momentum_y[j]);
             if constexpr (dim == 3) U_j_stage[3] = __ldg(&stage_U_0.momentum_z[j]);
             U_j_stage[dim + 1] = __ldg(&stage_U_0.energy[j]);
-
+            
             const auto flux_jHs0 = PF::f_local(U_j_stage);
             Number flux_ij_stage[dim + 2];
             #pragma unroll
@@ -464,7 +504,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
                 P_ij_tmp[k] += weight_0 * flux_ij_stage[k];
             }
         }
-
+        
         if (stage >= 2 && stage_U_1.rho != nullptr) {
             Number U_j_stage[dim + 2];
             U_j_stage[0] = __ldg(&stage_U_1.rho[j]);
@@ -472,7 +512,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
             if constexpr (dim >= 2) U_j_stage[2] = __ldg(&stage_U_1.momentum_y[j]);
             if constexpr (dim == 3) U_j_stage[3] = __ldg(&stage_U_1.momentum_z[j]);
             U_j_stage[dim + 1] = __ldg(&stage_U_1.energy[j]);
-
+            
             const auto flux_jHs1 = PF::f_local(U_j_stage);
             Number flux_ij_stage[dim + 2];
             #pragma unroll
@@ -492,7 +532,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
         if constexpr (dim >= 2) pij_matrix.p_momentum_y[idx] = P_ij_tmp[2];
         if constexpr (dim == 3) pij_matrix.p_momentum_z[idx] = P_ij_tmp[3];
         pij_matrix.p_energy[idx] = P_ij_tmp[dim + 1];
-
+        
         limiter.accumulate(U_j_array, scaled_c_ij, __ldg(&pressure[j]));
     }
 
@@ -501,7 +541,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
     if constexpr (dim >= 2) new_U.momentum_y[i] = U_i_new_array[2];
     if constexpr (dim == 3) new_U.momentum_z[i] = U_i_new_array[3];
     new_U.energy[i] = U_i_new_array[dim + 1];
-
+    
     ri.r_rho[i] = F_iH_array[0];
     ri.r_momentum_x[i] = F_iH_array[1];
     if constexpr (dim >= 2) ri.r_momentum_y[i] = F_iH_array[2];
@@ -515,6 +555,7 @@ __global__ void __launch_bounds__(128, 4) low_order_update_kernel(
     bounds[i * 3 + 1] = relaxed_bounds.rho_max;
     bounds[i * 3 + 2] = relaxed_bounds.s_min;
 }
+
 
 template<int dim, typename Number>
 __global__ void __launch_bounds__(192, 4) compute_limiter_kernel(
@@ -605,6 +646,7 @@ __global__ void __launch_bounds__(192, 4) compute_limiter_kernel(
         lij_matrix[idx] = limiter.limit(bounds_i, U_i_new_array, P_ij_array, Number(0), Number(1));
     }
 }
+
 
 template<int dim, typename Number>
 __global__ void __launch_bounds__(256, 4) high_order_update_iter1_kernel(
@@ -697,6 +739,7 @@ __global__ void __launch_bounds__(256, 4) high_order_update_iter1_kernel(
     }
 }
 
+
 template<int dim, typename Number>
 __global__ void __launch_bounds__(256, 4) high_order_update_iter2_kernel(
     State<dim, Number> new_U,
@@ -752,6 +795,7 @@ __global__ void __launch_bounds__(256, 4) high_order_update_iter2_kernel(
     new_U.energy[i] = U_i_new_array[dim + 1];
 }
 
+
 template<int dim, typename Number>
 __global__ void sadd_kernel(
     State<dim, Number> dst,
@@ -761,7 +805,7 @@ __global__ void sadd_kernel(
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_dofs) return;
-
+    
     dst.rho[i] = s * dst.rho[i] + b * src.rho[i];
     dst.momentum_x[i] = s * dst.momentum_x[i] + b * src.momentum_x[i];
     if constexpr (dim >= 2) {

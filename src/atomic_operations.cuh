@@ -10,6 +10,7 @@ __device__ __forceinline__ float atomicMinFloat(float* addr, float value) {
     return old;
 }
 
+
 __device__ __forceinline__ void atomicMinNumber(float* addr, float value) {
     atomicMinFloat(addr, value);
 }

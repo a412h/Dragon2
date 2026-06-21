@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="dragon2_title_pixelated_nobg.png"/>
+  <img src="dragon2_banner.png"/>
 </div>
 
 # Dragon2 Solver
@@ -59,6 +59,15 @@ cd build
 ## Documentation
 
 - [User Manual](docs/USER_MANUAL.md)
+
+## Updates
+
+- (Added June 21, 2026) 
+The Matrix-Free implementation is now made with Sum Factorization (exploiting Tensor-Product structure of the basis functions).
+This replaces the dense quadrature points - dofs interpolations, reducing computational cost and memory requirements (on the GPU).
+The CUDA implementation of this is done with one thread for one cell; this can cost too much of fast GPU memory on high order elements (then probably per quadrature point threading is better (see dealii library)).
+Only Q1 elements work, Q2 is implemented but as expected does not increase convergence order beyond 2, because some other parts of the scheme are still second-order. Ask for a third order version in a next release.
+Also some improvements and simplifications to dof ordering.
 
 ## Sponsor - Consulting
 Consider contacting us if you need new functionalities.

@@ -1,5 +1,9 @@
+# 3D Sphere in Channel Test Case — translated from sphere-channel-3d.cfg
+# Pre-built mesh from cases/sphere-channel-3d.msh.
+# Boundary IDs: 0=do_nothing (default), 2=slip, 4=dirichlet.
+
 subsection A - TimeLoop
-    set basename          = sphere-channel-3d
+    set basename          = ../run/sphere-channel-3d
     set final time        = 5.0
     set timer granularity = 0.1
 end
@@ -14,11 +18,11 @@ subsection B - Equation
 end
 
 subsection C - Discretization
+    set geometry        = mesh_file
+    set mesh refinement = 0
 
     subsection mesh_file
-        set file path                  = ../cases/sphere-channel-3d.msh
-        set boundary mapping           = 0:do_nothing, 2:slip, 4:dirichlet
-        set default boundary condition = do_nothing
+        set file path = ../cases/sphere-channel-3d.msh
     end
 end
 
