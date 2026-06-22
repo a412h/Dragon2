@@ -1,4 +1,4 @@
-# Navier-Stokes Mach 8 flow for NASA capsule atmospheric reentry
+# NASA capsule reentry
 
 subsection A - TimeLoop
     set basename            = ns-mach3-capsule-2d
