@@ -37,7 +37,7 @@ public:
 
         const double angle_deg = std::atan2(direction[1], direction[0]) * 180.0 / M_PI;
         if (std::abs(angle_deg) > 0.01) {
-            std::cout << "  Angle of attack: " << angle_deg << "°" << std::endl;
+            std::cout << "  Angle of attack: " << angle_deg << " deg." << std::endl;
         }
         
         std::cout << "  Conservative: [" << conservative[0] << ", " 

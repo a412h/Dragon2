@@ -10,9 +10,6 @@ subsection B - Equation
     set dimension       = 2
     set equation        = navier_stokes
     set gamma           = 1.4
-    # Viscous Navier-Stokes at Re = rho*U*D/mu = 1.4*3.0*0.5/mu = 2000.
-    # kappa is the scaled conductivity c_v^-1 k = gamma*mu/Pr with Pr = 0.71.
-    # set mu              = 1.05e-3
     set mu              = 1.05e-6
     set lambda          = 0.0
     set kappa           = 2.07e-3
@@ -45,7 +42,3 @@ subsection H - TimeIntegrator
     #set time stepping scheme  = strang erk 33 cn
 end
 
-#subsection J - VTUOutput
-#    set use mpi io     = true
-#    set schlieren beta = 10
-#end

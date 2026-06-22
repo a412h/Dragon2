@@ -1,9 +1,7 @@
-# 3D Cylinder Test Case — translated from cylinder-3d.cfg
-# Pre-built mesh from cases/cylinder-3d.msh.
-# Boundary IDs: 0=do_nothing (default), 2=slip, 4=dirichlet.
+# 3D Cylinder Test Case
 
 subsection A - TimeLoop
-    set basename          = ../run/cylinder-3d
+    set basename          = cylinder-3d
     set final time        = 5.0
     set timer granularity = 0.1
 end

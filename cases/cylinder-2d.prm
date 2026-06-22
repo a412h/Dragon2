@@ -1,9 +1,7 @@
-# 2D Cylinder Test Case — translated from cylinder-2d.cfg
-# Reads pre-built mesh from cases/cylinder-2d.msh.
-# Boundary IDs in the .msh: 0=do_nothing, 2=slip, 4=dirichlet.
+# 2D Cylinder Test Case
 
 subsection A - TimeLoop
-    set basename          = ../run/cylinder-2d
+    set basename          = cylinder-2d
     set final time        = 5.0
     set timer granularity = 0.025
 end

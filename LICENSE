@@ -1,6 +1,6 @@
 Foreword:
 Dragon2 is an independent CUDA / C++ implementation of the paper by
-Guermond et al. On the implementation of a robust and efficient finite element-based parallel solver for the compressible Navier–Stokes equations,
+Guermond et al. On the implementation of a robust and efficient finite element-based parallel solver for the compressible Navier-Stokes equations,
 and is inspired by the ryujin project
 (https://github.com/conservation-laws/ryujin), which is licensed under the
 Apache License 2.0 with LLVM Exception. Please refer to ryujin repository for

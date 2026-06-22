@@ -1,9 +1,7 @@
-# 3D Capsule Reentry Test Case — translated from capsule-3d.cfg
-# Pre-built mesh from cases/capsule-3d.msh.
-# Boundary IDs: 3=no_slip (capsule), 5=dynamic (far-field), 0=do_nothing (default).
+# 3D Capsule Reentry Test Case
 
 subsection A - TimeLoop
-    set basename          = ../run/capsule-3d
+    set basename          = capsule-3d
     set final time        = 100.0
     set timer granularity = 1.0
 end

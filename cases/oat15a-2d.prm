@@ -1,9 +1,7 @@
-# 2D ONERA OAT15a Transonic Airfoil — translated from oat15a-2d.cfg
-# Pre-built mesh from cases/oat15a_mesh.msh.
-# Boundary IDs: 3=no_slip (airfoil surface), 5=dynamic (far-field), 0=do_nothing (default).
+# 2D ONERA OAT15a Transonic Airfoil
 
 subsection A - TimeLoop
-    set basename          = ../run/oat15a-2d
+    set basename          = oat15a-2d
     set final time        = 0.22
     set timer granularity = 0.0001
 end
@@ -13,9 +11,9 @@ subsection B - Equation
     set equation  = navier_stokes
     # Air properties at sea level
     set gamma   = 1.401
-    set mu      = 1.789e-5    # Dynamic viscosity [Pa*s]
-    set lambda  = 0.0         # Bulk viscosity
-    set kappa   = 3.616e-5    # Scaled thermal conductivity
+    set mu      = 1.789e-5
+    set lambda  = 0.0
+    set kappa   = 3.616e-5
 end
 
 subsection C - Discretization
