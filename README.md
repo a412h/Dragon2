@@ -70,6 +70,10 @@ Consider contacting us if you need new functionalities.
 ![Cylinder 2D](ns_mach3_2d_7.png)
 ![Cylinder 3D](ns_mach3_3d_5.png)
 
+#### Cylinder Mach3, with viscosity and no-slip, 2d:
+
+![Cylinder 2D](ns_mach3_2d_visc_noslip.png)
+
 #### Sphere flying at Mach3 inside a uniform channel (contour of density, 1.6 millions of cells):
 
 ![Sphere 3D](ns_sphere_channel_mach3.png)
