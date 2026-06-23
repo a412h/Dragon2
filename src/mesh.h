@@ -796,7 +796,6 @@ public:
             std::cerr << "ERROR: Airfoil mesh file not found!" << std::endl;
             std::cerr << "===============================================" << std::endl;
             std::cerr << "Looking for: " << filename << std::endl;
-            std::cerr << "\nGenerate it in ryujin with generate_oat15a_mesh.cpp" << std::endl;
             std::cerr << "===============================================\n" << std::endl;
             throw std::runtime_error("Airfoil mesh file not found");
         }
@@ -813,12 +812,12 @@ public:
                 if (!cell->face(f)->at_boundary()) continue;
                 
                 auto face = cell->face(f);
-                const auto ryujin_id = face->boundary_id();
+                const auto b_id = face->boundary_id();
                 
-                if (ryujin_id == 3) {
+                if (b_id == 3) {
                     face->set_boundary_id(NO_SLIP);  
                 }
-                else if (ryujin_id == 5) {
+                else if (b_id == 5) {
                     face->set_boundary_id(DYNAMIC);  
                 }
             }
