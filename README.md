@@ -65,7 +65,7 @@ Consider contacting us if you need new functionalities.
 
 ### - These are extracts of transcient Navier-Stokes simulations -
 
-#### Cylinder Mach3, resp. in 2d and 3d:
+#### Cylinder, resp. 2d Mach3 low Re, 3d Mach1 high Re:
 
 ![Cylinder 2D](ns_mach3_2d_7.png)
 ![Cylinder 3D](ns_mach3_3d_5.png)
