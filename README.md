@@ -104,7 +104,7 @@ Consider contacting us if you need new functionalities.
 
 ## Updates
 
-- (Added June 21, 2026) 
+- Added June 21, 2026 
 
 The Matrix-Free implementation is now made with Sum Factorization (exploiting Tensor-Product structure of the basis functions).  
 This replaces the dense quadrature points - dofs interpolations, reducing computational cost and memory requirements (on the GPU).  
