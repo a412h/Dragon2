@@ -104,7 +104,7 @@ Consider contacting us if you need new functionalities.
 
 ## Updates
 
-- Next update (ready to upload on October, 8, 2026)
+- Next update (ready to upload on October, 8, 2026)  
 Various improvements for coalescence (=> large increase of speed).  
 Experimental implementation of fp64 via emulation from fp32 engines - Why ? Because: It looks like native fp64 engines are neglected, in favor of lower precision engines; so some workarounds are needed.
 This new implementation gives much faster fp64 execution than the native card based fp64 computation.  
