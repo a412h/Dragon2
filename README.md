@@ -104,8 +104,14 @@ Consider contacting us if you need new functionalities.
 
 ## Updates
 
-- Added June 21, 2026 
+- Next update (ready to upload on October, 8, 2026)
+Various improvements for coalescence (=> large increase of speed).  
+Experimental implementation of fp64 via emulation from fp32 engines - Why ? Because: It looks like native fp64 engines are neglected, in favor of lower precision engines; so some workarounds are needed.
+This new implementation gives much faster fp64 execution than the native card based fp64 computation.  
+Note: these updates are not yet uploaded, I will do it if there is enough demand.  
 
+
+- Added June 21, 2026 
 The Matrix-Free implementation is now made with Sum Factorization (exploiting Tensor-Product structure of the basis functions).  
 This replaces the dense quadrature points - dofs interpolations, reducing computational cost and memory requirements (on the GPU).  
 The CUDA implementation of this is done with one thread for one cell; this can cost too much of fast GPU memory on very high order elements (then probably per quadrature point threading is better (see dealii library)).  
