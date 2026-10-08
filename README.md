@@ -74,6 +74,10 @@ Consider contacting us if you need new functionalities.
 
 ![Cylinder 2D](ns_mach3_2d_visc_noslip.png)
 
+#### Cylinder Mach3, Euler, with fp64 emulation, 2d (after a few time steps):
+
+![Cylinder 2D](ns_mach3_2d_euler_fp64emu.png)
+
 #### Sphere flying at Mach3 inside a uniform channel (contour of density, 1.6 millions of cells):
 
 ![Sphere 3D](ns_sphere_channel_mach3.png)
@@ -106,7 +110,8 @@ Consider contacting us if you need new functionalities.
 
 - Next update (ready to upload on October, 8, 2026)  
 Various improvements for coalescence (=> large increase of speed).  
-Experimental implementation of fp64 via emulation from fp32 engines - Why ? Because: It looks like native fp64 engines are neglected, in favor of lower precision engines; so some workarounds are needed.
+Experimental implementation of fp64 via emulation from fp32 engines - Why ? Because: fp64 engine is slow 
+compared to lower precision engines; so some workarounds are needed.
 This new implementation gives much faster fp64 execution than the native card based fp64 computation.  
 Note: these updates are not yet uploaded, I will do it if there is enough demand.  
 
